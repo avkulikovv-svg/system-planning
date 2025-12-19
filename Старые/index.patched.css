@@ -1,0 +1,340 @@
+/* ===== RESET ===== */
+html, body, #root{
+  width:100%;
+  height:100%;
+  margin:0;
+  padding:0;
+}
+body{
+  display:block;
+  min-width:0;
+  min-height:0;
+  background:#d0e4ff;           /* общий фон */
+  color:#0f172a;
+  font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Arial,"Apple Color Emoji","Segoe UI Emoji";
+}
+#root{
+  max-width:none;               /* НИЧЕГО не центрируем! */
+  text-align:left;              /* всё выравниваем влево */
+  padding:0;
+}
+
+/* ===== THEME TOKENS ===== */
+:root{
+  /* pills */
+  --pill-bg:#fff;
+  --pill-text:#0f172a;
+  --pill-border:#0f172a33;
+  --pill-hover-bg:#f1f5f9;
+  --pill-active-bg:#e0f2fe;
+  --pill-active-br:#2563eb;
+
+  /* plates/cards */
+  --plate-bg:#ffffffcc;
+  --plate-br:#e2e8f0;
+  --plate-blur:6px;
+
+  --radius-lg:14px;
+  --radius-sm:10px;
+
+  /* layout */
+  --page-px:12px;
+  --card-radius:16px;
+  --card-br:#e2e8f0;
+  --card-bg:#fff;
+  --card-shadow:0 6px 16px rgba(15,23,42,.06);
+}
+
+/* ===== UNIVERSAL PLATE / PILL ===== */
+.app-plate{
+  background:var(--plate-bg);
+  backdrop-filter:blur(var(--plate-blur));
+  -webkit-backdrop-filter:blur(var(--plate-blur));
+  border:1px solid var(--plate-br);
+  border-radius:var(--radius-lg);
+}
+.app-plate--solid{
+  background:#fff;
+  backdrop-filter:none;
+  -webkit-backdrop-filter:none;
+}
+
+.app-pill{
+  appearance:none;
+  border:1.5px solid var(--pill-border);
+  background:var(--pill-bg);
+  color:var(--pill-text);
+  border-radius:var(--radius-sm);
+  padding:10px 14px;
+  line-height:1;
+  font-size:14px;
+  display:inline-flex;
+  align-items:center;
+  gap:10px;
+  cursor:pointer;
+  transition:background .15s, border-color .15s, box-shadow .15s, color .15s;
+  white-space:nowrap;
+}
+.app-pill:hover{ background:var(--pill-hover-bg); }
+.app-pill.is-active{
+  background:var(--pill-active-bg);
+  border-color:var(--pill-active-br);
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--pill-active-br) 35%, transparent);
+}
+.app-pill .icon{ width:20px; height:20px; }
+.app-pill--sm{ padding:8px 12px; font-size:13px; }
+.app-pill--md{ padding:10px 14px; font-size:14px; }
+.app-pill--lg{ padding:12px 16px; font-size:15px; }
+
+/* ===== SIDEBAR (жёстко слева) ===== */
+#mrp-sidebar{
+  position:fixed !important;
+  top:0 !important;
+  left:0 !important;
+  height:100vh !important;
+  z-index:30 !important;
+  background:rgba(255,255,255,0.25) !important;
+  backdrop-filter:blur(var(--plate-blur));
+  -webkit-backdrop-filter:blur(var(--plate-blur));
+  border-right:1px solid rgba(0,0,0,0.05);
+}
+#mrp-sidebar .sidebar-header{
+  display:flex !important;
+  align-items:center !important;
+  justify-content:flex-start !important;
+  height:56px !important;
+  padding:0 12px !important;
+  border-bottom:1px solid var(--plate-br) !important;
+}
+#mrp-sidebar .sidenav{
+  display:flex !important;
+  flex-direction:column !important;
+  align-items:stretch !important;
+  gap:10px !important;
+  padding:10px !important;
+  height:calc(100vh - 56px) !important;
+  overflow:auto !important;
+  flex-wrap:nowrap !important;
+}
+/* элементы меню */
+#mrp-sidebar .sidenav .app-pill{ width:100%; justify-content:flex-start; }
+#mrp-sidebar .sidenav .app-pill .icon{ width:22px; height:22px; }
+
+/* правая часть — не схлопывается */
+#mrp-root{ min-width:0; }
+
+/* ===== PAGE/CARD LAYOUT ===== */
+.mrp-page{
+  padding:var(--page-px);
+  margin:0;
+}
+.mrp-card{
+  background:var(--card-bg);
+  border:1px solid var(--card-br);
+  border-radius:var(--card-radius);
+  box-shadow:var(--card-shadow);
+  width:100%;
+  max-width:none;
+  margin:0 0 var(--page-px) 0;
+  padding:var(--page-px);
+}
+
+/* горизонтальный скролл только внутри карточек */
+.mrp-hscroll{ overflow-x:auto; overflow-y:hidden; width:100%; }
+
+/* компактные таблицы/поля */
+.table-compact th, .table-compact td{ padding:.35rem .5rem; }
+.input-compact{ height:28px; padding:.25rem .5rem; }
+
+/* верхняя панель всегда слева */
+.mrp-toolbar{ justify-content:flex-start !important; }
+
+/* убрать стрелочки у number (по желанию) */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
+input[type="number"]{ -moz-appearance:textfield; }
+
+/* === PLAN GRID (layout & cosmetics) ==================== */
+.plangrid{
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+
+  /* ширины — можно подстроить под вкус */
+  --prod-w:   240px;   /* "Продукт" */
+  --fg-w:      72px;   /* "Остаток ГП" */
+  --metric-w: 104px;   /* "Показатель" (План/Произв./Мат.) */
+  --date-w:   50px;   /* дата-колонки (сужено) */
+}
+
+.plangrid th, .plangrid td{ vertical-align: top; padding: 3px 6px; }
+
+/* sticky header дат */
+.plangrid thead th{
+  position: sticky; top: 0; z-index: 5; background:#fff;
+  box-shadow: 0 1px 0 rgba(15,23,42,.08);
+}
+
+/* липкие первые 3 колонки */
+.plangrid .prod-col{
+  position: sticky; left: 0; z-index: 6;
+  width: var(--prod-w); min-width: var(--prod-w); max-width: var(--prod-w);
+  background:#fff;
+}
+.plangrid .fg-col{
+  position: sticky; left: var(--prod-w); z-index: 6;
+  width: var(--fg-w); min-width: var(--fg-w); max-width: var(--fg-w);
+  background:#fff;
+}
+.plangrid .metric-col{
+  position: sticky; left: calc(var(--prod-w) + var(--fg-w)); z-index: 6;
+  width: var(--metric-w); min-width: var(--metric-w); max-width: var(--metric-w);
+  background:#fff;
+}
+
+/* дата-колонки одинаковой ширины */
+.plangrid .date-col{
+  width: var(--date-w); min-width: var(--date-w); max-width: var(--date-w);
+}
+
+/* лёгкая зебра/hover */
+.plangrid tbody tr:hover{ background:#f8fafc; }
+
+/* выходные и "сегодня" */
+.plangrid .is-weekend{ background:#ffc0c0; }
+.plangrid .is-today{ box-shadow: inset 0 -2px 0 #2563eb; }
+
+/* вертикальная "стопка" в ячейке даты */
+.plangrid .cell-stack{ display:flex; flex-direction:column; gap:4px; }
+
+/* компактные инпуты и уже, чем колонка */
+.input-compact{ height:24px; padding:.25rem .5rem; }
+.plangrid .date-col .input-compact{ width: calc(var(--date-w) - 18px); } /* 18 ≈ паддинги+бордер */
+
+/* index.css / app.css */
+.plangrid input::placeholder { color: #dbdde1; } /* slate-400 */
+
+/* ===== MRP util ===== */
+.nowrap{ white-space: nowrap; }
+.truncate-ell{ max-width: 420px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.table-actions{ display:flex; gap:8px; flex-wrap:nowrap; justify-content:flex-start; }
+
+/* чуть плотнее в таблицах */
+.min-w-full.text-sm th, .min-w-full.text-sm td{ vertical-align: middle; }
+
+/* ===== MRP table utils (compact) ===== */
+.table-compact { font-size: 13px; }
+.table-compact th, .table-compact td { padding: .25rem .5rem; } /* было .35 — сделали плотнее */
+.table-compact .app-pill { padding: 6px 10px; font-size: 12px; border-radius: 10px; }
+
+/* no-wrap / ellipsis */
+.nowrap{ white-space: nowrap; }
+.truncate-ell{ display:block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* узкие служебные колонки */
+.col-code   { width: 160px; max-width: 160px; }
+.col-actions{ width: 128px; max-width: 128px; }
+.table-actions{ display:flex; gap:8px; flex-wrap:nowrap; justify-content:flex-start; }
+
+/* ===== обязательные/невалидные поля ===== */
+:root{
+  --danger: #f43f5e;           /* rose-500 */
+  --danger-ring: rgba(244,63,94,.18);
+}
+[data-invalid="true"]{
+  border-color: var(--danger) !important;
+  box-shadow: 0 0 0 3px var(--danger-ring);
+  outline: none;
+  transition: box-shadow .15s ease, border-color .15s ease;
+}
+
+/* === Modal UI (unified) === */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 12px;
+  border: 1px solid var(--plate-br);
+  background: #fff;
+  box-shadow: 0 1px 0 rgba(0,0,0,.04);
+  transition: background .15s ease, transform .05s ease;
+}
+.icon-btn:hover { background: #fafafa; }
+.icon-btn:active { transform: translateY(1px); }
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(2, 6, 23, 0.5); /* slate-900/50 */
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.modal-center {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal-card {
+  width: 100%;
+  max-height: min(92vh, 840px);
+  overflow: hidden;
+  background: rgba(255,255,255,.96);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  border-radius: 16px;
+  border: 1px solid var(--plate-br);
+  box-shadow: 0 20px 40px rgba(2, 6, 23, 0.25);
+  display: flex;
+  flex-direction: column;
+}
+.modal-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  background: rgba(255,255,255,.92);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  border-bottom: 1px solid var(--plate-br);
+}
+.modal-title { font-size: 15px; font-weight: 600; color: var(--slate-900, #0f172a); }
+.modal-icon {
+  width: 36px; height: 36px;
+  border-radius: 12px;
+  background: #eef2ff; /* indigo-50 */
+  color: #4f46e5; /* indigo-600 */
+  display: grid; place-items: center;
+  font-size: 18px;
+}
+.modal-body {
+  padding: 16px 20px;
+  overflow: auto;
+}
+
+/* Validation helper (can be toggled via JS by adding .is-invalid to input/select) */
+.is-invalid {
+  border-color: #fb7185 !important; /* rose-400 */
+  box-shadow: 0 0 0 3px rgba(251, 113, 133, .25);
+}
+.form-alert {
+  margin-bottom: 8px;
+  color: #b91c1c;
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  padding: 8px 12px;
+  font-size: 13px;
+}

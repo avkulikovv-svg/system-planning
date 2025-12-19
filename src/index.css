@@ -1,0 +1,515 @@
+/* ===================== RESET ===================== */
+html, body, #root{ width:100%; height:100%; margin:0; padding:0; }
+body{
+  display:block; min-width:0; min-height:0;
+  background:#f6f9ff; color:#0f172a;
+  font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Arial,"Apple Color Emoji","Segoe UI Emoji";
+}
+#root{ max-width:none; text-align:left; padding:0; }
+/* формы наследуют шрифт body */
+input, select, textarea, button{ font: inherit; }
+
+
+/* ===================== TOKENS (общие) ===================== */
+:root{
+  --radius:8px;            /* скругление контролов и кнопок */
+  --radius-lg:16px;
+  --h:38px;                /* единая высота инпутов/селектов/икон-кнопок */
+  --gap:12px;              /* шаг сетки форм */
+  --bc:#e5e7eb;            /* граница (slate-200) */
+  --bc-focus:#93c5fd;      /* focus border */
+  --ring:rgba(59,130,246,.18);
+  --txt-muted:#475569;     /* slate-600 */
+
+  /* pills */
+  --pill-bg:#2879fb; --pill-text:#ffffff; --pill-border:#0f172a33;
+  --pill-hover-bg:#2563eb; --pill-active-bg:#73a8fe; --pill-active-br:#2563eb;
+
+  /* cards */
+  --card-radius:16px; --card-br:#e2e8f0; --card-bg:#fff;
+  --card-shadow:0 6px 16px rgba(15,23,42,.06);
+
+  /* states */
+  --danger:#f43f5e; --danger-ring:rgba(244,63,94,.18);
+}
+
+/* =================== ACTION TOKENS (1 место для всех правок) =================== */
+:root{
+  --act-size: 34px;          /* размер икон-кнопки */
+  --act-radius: 10px;        /* скругление */
+  --act-gap: 12px;           /* ОДИН зазор между соседними иконками */
+  --act-shadow: 0 1px 0 rgba(2,6,23,.04);
+
+  /* тона (меняй тут — перекрасится везде) */
+  --tone-slate-bg:#E7ECF5;   --tone-slate-bg-h:#DDE4F1;   --tone-slate-fg:#334155;
+  --tone-red-bg:#FEE2E2;     --tone-red-bg-h:#FECACA;     --tone-red-fg:#991B1B;
+  --tone-green-bg:#DCFCE7;   --tone-green-bg-h:#CFF7DC;   --tone-green-fg:#166534;
+  --tone-amber-bg:#FEF3C7;   --tone-amber-bg-h:#FDE68A;   --tone-amber-fg:#92400E;
+  --tone-blue-bg:#E0EAFF;    --tone-blue-bg-h:#D2DDFE;    --tone-blue-fg:#1E40AF;
+}
+
+/* ===================== LAYOUT / SIDEBAR / CARD ===================== */
+#mrp-sidebar{ position:fixed; top:0; left:0; height:100vh; z-index:30;
+  background:rgba(213, 225, 255, 0.25); backdrop-filter:blur(6px); border-right:1px solid rgba(0,0,0,.05); }
+#mrp-sidebar .sidebar-header{ display:flex; align-items:center; height:56px; padding:0 12px; border-bottom:1px solid var(--bc); }
+#mrp-sidebar .sidenav{ display:flex; flex-direction:column; gap:10px; padding:10px; height:calc(100vh - 56px); overflow:auto; }
+#mrp-sidebar .sidenav .app-pill{ width:100%; justify-content:flex-start; }
+#mrp-root{ min-width:0; }
+.mrp-page{ padding:12px; }
+.mrp-card{
+  background:var(--card-bg); border:1px solid var(--card-br); border-radius:var(--card-radius);
+  box-shadow:var(--card-shadow); width:100%; padding:12px; margin:0 0 12px 0;
+}
+.mrp-hscroll{ overflow-x:auto; overflow-y:hidden; width:100%; }
+
+/* ===================== PILLS (кнопки-навигации) ===================== */
+.app-pill{
+  appearance:none; border:1.5px solid var(--pill-border); background:var(--pill-bg); color:var(--pill-text);
+  border-radius:10px; padding:10px 14px; line-height:1; font-size:14px; display:inline-flex; align-items:center; gap:10px; cursor:pointer;
+  transition:background .15s, border-color .15s, box-shadow .15s, color .15s; white-space:nowrap;
+}
+.app-pill:hover{ background:var(--pill-hover-bg); }
+.app-pill.is-active{ background:var(--pill-active-bg); border-color:var(--pill-active-br);
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--pill-active-br) 35%, transparent); }
+.app-pill--sm{ padding:8px 12px; font-size:13px; } .app-pill--md{ padding:10px 14px; } .app-pill--lg{ padding:12px 16px; }
+
+/* ===================== INPUTS / TABLES (compact) ===================== */
+.table-compact{ font-size:13px; }
+.table-compact th, .table-compact td{ padding:.25rem .5rem; vertical-align:middle; }
+.input-compact{ height:28px; padding:.25rem .5rem; }
+.nowrap{ white-space:nowrap; } .truncate-ell{ display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+/* number без стрелок */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
+input[type="number"]{ -moz-appearance:textfield; appearance:textfield; }
+
+/* ===================== MODAL ===================== */
+.modal-header{
+  position:sticky; top:0; display:flex; align-items:center; gap:12px; padding:12px 16px;
+  background:rgba(255,255,255,0.92); backdrop-filter:blur(2px); border-bottom:1px solid var(--bc);
+}
+.modal-body{ padding:16px; }
+.modal-footer{
+  position:sticky; bottom:0; display:flex; justify-content:flex-end; gap:8px; padding:12px 16px;
+  background:rgba(255,255,255,0.92); backdrop-filter:blur(2px); border-top:1px solid var(--bc);
+}
+
+/* ===================== FORM ===================== */
+.ui-form{ display:block; }
+.form-grid-2{ display:grid; grid-template-columns:1fr 1fr; gap:var(--gap); }
+.form-span-2{ grid-column:1 / -1; }
+.form-row{ display:flex; flex-direction:column; gap:6px; }
+.form-label{ font-size:13px; font-weight:600; color:var(--txt-muted); }
+.form-help{ font-size:11px; color:#dc2626; margin-top:2px; }
+
+.form-control{
+  height:var(--h); padding:8px 12px; font-size:14px; box-sizing:border-box;
+  background:#fff; color:#0f172a; border:1px solid var(--bc); border-radius:var(--radius); outline:none;
+}
+textarea.form-control{ height:auto; min-height:88px; }
+select.form-control{
+  -webkit-appearance:none; appearance:none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #64748b 50%),
+    linear-gradient(135deg, #64748b 50%, transparent 50%);
+  background-position: calc(100% - 18px) 16px, calc(100% - 12px) 16px;
+  background-size:6px 6px; background-repeat:no-repeat; padding-right:28px;
+}
+.form-control:focus{ border-color:var(--bc-focus); box-shadow:0 0 0 3px var(--ring); }
+[data-invalid="true"].form-control{ border-color:var(--danger)!important; box-shadow:0 0 0 3px var(--danger-ring)!important; }
+
+/* икон-кнопки (+/×) внутри форм */
+.icon-btn{
+  width:var(--h); height:var(--h); display:inline-flex; align-items:center; justify-content:center;
+  border:1px solid var(--bc); border-radius:var(--radius); background:#fff; color:#334155;
+  box-shadow:0 1px 1px rgba(2,6,23,.04); cursor:pointer; transition:background .15s, border-color .15s;
+}
+.icon-btn:hover{ background:#f8fafc; } .icon-btn:active{ background:#f1f5f9; }
+.icon-btn svg{ width:16px; height:16px; }
+
+/* ===================== SPEC MODAL (layout) ===================== */
+/* Код — наследует глобальный шрифт, ровные цифры */
+.spec-grid .code-cell{
+  font-family: inherit;
+  font-size: 13px;         /* подгони под общий размер */
+  font-weight: 600;        /* или 500, если нужно тоньше */
+  letter-spacing: .2px;
+  color: var(--txt-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Узкие пределы контролов (оставим тут, рядом с сеткой) */
+.spec-grid .qty-input{ max-width: 120px; }
+.spec-grid .uom-select{ max-width: 140px; }
+
+.spec-grid{
+display:grid;
+/* Код | Наименование | Поставщик | Кол-во | Ед. изм. | ⋯ */
+grid-template-columns: 0.3fr 0.8fr 0.7fr 0.1fr 0.2fr 40px;
+gap: var(--gap);
+align-items:center;
+min-width:400px; /* чуть увеличили из-за доп. колонки */
+}
+.spec-grid .hdr{ font-size:12px; font-weight:600; color:var(--txt-muted); }
+.qty-input{ text-align:right; }
+.ven-input[readonly]{ background:#f8fafc; color:#334155; }
+.spec-inline{ display:flex; align-items:center; gap:var(--gap); }
+.spec-inline > .form-control{ width:auto; flex:1 1 auto; }
+.spec-inline > .icon-btn{ flex:0 0 var(--h); height:var(--h); }
+
+/* ===================== UNIFIED ACTION ICON ===================== */
+/* Базовая иконка-действие */
+.act{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:var(--act-size); height:var(--act-size); border-radius:var(--act-radius);
+  background:var(--tone-slate-bg); color:var(--tone-slate-fg);
+  box-shadow:var(--act-shadow);
+  transition: background-color .15s ease, transform .06s ease;
+  vertical-align:middle;
+}
+.act:hover{ background:var(--tone-slate-bg-h); }
+.act:active{ transform: translateY(1px); }
+.act svg{ width: calc(var(--act-size) * .53); height: calc(var(--act-size) * .53); }
+
+/* ЕДИНЫЕ отступы между иконками — без контейнеров/extra классов */
+.act + .act{ margin-left: var(--act-gap); }
+@media (max-width:1200px){ .act + .act{ margin-left: 8px; } }
+
+/* Семантические цвета (1 точка настройки) */
+:root{
+  --act-edit-bg:   var(--tone-blue-bg);   --act-edit-bg-h:   var(--tone-blue-bg-h);   --act-edit-fg:   var(--tone-blue-fg);
+  --act-delete-bg: var(--tone-red-bg);    --act-delete-bg-h: var(--tone-red-bg-h);    --act-delete-fg: var(--tone-red-fg);
+  --act-spec-bg:   var(--tone-slate-bg);  --act-spec-bg-h:   var(--tone-slate-bg-h);  --act-spec-fg:   var(--tone-slate-fg);
+  --act-post-bg:   var(--tone-green-bg);  --act-post-bg-h:   var(--tone-green-bg-h);  --act-post-fg:   var(--tone-green-fg);
+  --act-unpost-bg: var(--tone-amber-bg);  --act-unpost-bg-h: var(--tone-amber-bg-h);  --act-unpost-fg: var(--tone-amber-fg);
+}
+.act[data-action="edit"]   { background:var(--act-edit-bg);   color:var(--act-edit-fg); }
+.act[data-action="edit"]:hover   { background:var(--act-edit-bg-h); }
+.act[data-action="delete"] { background:var(--act-delete-bg); color:var(--act-delete-fg); }
+.act[data-action="delete"]:hover { background:var(--act-delete-bg-h); }
+.act[data-action="spec"]   { background:var(--act-spec-bg);   color:var(--act-spec-fg); }
+.act[data-action="spec"]:hover   { background:var(--act-spec-bg-h); }
+.act[data-action="post"]   { background:var(--act-post-bg);   color:var(--act-post-fg); }
+.act[data-action="post"]:hover   { background:var(--act-post-bg-h); }
+.act[data-action="unpost"] { background:var(--act-unpost-bg); color:var(--act-unpost-fg); }
+.act[data-action="unpost"]:hover { background:var(--act-unpost-bg-h); }
+
+/* ===================== PLAN GRID (оставлено как было) ===================== */
+.plangrid{
+  table-layout:fixed; border-collapse:separate; border-spacing:0;
+  --prod-w:240px; --fg-w:72px; --metric-w:104px; --date-w:50px;
+}
+.plangrid th, .plangrid td{ vertical-align:top; padding:3px 6px; }
+.plangrid thead th{ position:sticky; top:0; z-index:5; background:#fff; box-shadow:0 1px 0 rgba(15,23,42,.08); }
+.plangrid .prod-col{ position:sticky; left:0; z-index:6; width:var(--prod-w); min-width:var(--prod-w); max-width:var(--prod-w); background:#fff; }
+.plangrid .fg-col{ position:sticky; left:var(--prod-w); z-index:6; width:var(--fg-w); min-width:var(--fg-w); max-width:var(--fg-w); background:#fff; }
+.plangrid .metric-col{ position:sticky; left:calc(var(--prod-w) + var(--fg-w)); z-index:6; width:var(--metric-w); min-width:var(--metric-w); max-width:var(--metric-w); background:#fff; }
+.plangrid .date-col{ width:var(--date-w); min-width:var(--date-w); max-width:var(--date-w); }
+.plangrid tbody tr:hover{ background:#f8fafc; }
+.plangrid .is-weekend{ background:#ffc0c0; }
+.plangrid .is-today{ box-shadow: inset 0 -2px 0 #2563eb; }
+/* === ПРОСРОЧЕННЫЙ ПЛАН — безопасная версия без оверлеев и растяжек === */
+/* базово для ячеек план-таблицы */
+.plangrid td{
+  position: relative;    /* якорь для ::after */
+  overflow: visible;     /* подсказка не обрезается краями ячейки */
+}
+
+/* просроченная ячейка: мягкий фон */
+.plangrid td.is-overdue {
+  background: hsl(0 85% 96%); /* light red */
+}
+
+/* аккуратный "уголок" справа сверху — ПЕРЕНЕСЁН НА ::before,
+   чтобы не конфликтовать с [data-tip]::after */
+.plangrid td.is-overdue::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 0;
+  height: 0;
+  border-top: 8px solid #ef4444;
+  border-left: 8px solid transparent;
+  pointer-events: none;
+  z-index: 1; /* ниже тултипа */
+}
+
+
+
+/* чтобы инпут не перекрашивал фон ячейки */
+.plangrid td.is-overdue input {
+  background: transparent;
+}
+
+
+
+/* Инпуты/селекты/текстареа внутри модальных окон — чтобы всё было ровно */
+.modal-body input,
+.modal-body select,
+.modal-body textarea{
+  height: var(--h);
+  padding: 8px 12px;
+  border: 1px solid var(--bc);
+  border-radius: var(--radius);
+  font-size: 14px;
+  background: #fff;
+  outline: none;
+  box-sizing: border-box;
+}
+.modal-body select{
+  -webkit-appearance: none;
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #64748b 50%),
+    linear-gradient(135deg, #64748b 50%, transparent 50%);
+  background-position: calc(100% - 18px) 16px, calc(100% - 12px) 16px;
+  background-size: 6px 6px;
+  background-repeat: no-repeat;
+  padding-right: 28px;
+}
+
+/* ===== Modal: базовая обвязка ===== */
+.modal-shell{
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  z-index: 10000;              /* выше любых таблиц/подсказок */
+}
+
+.modal-backdrop{
+  position: absolute;
+  inset: 0;
+  background: rgba(15,23,42,.45) !important;  /* всегда тёмный, не красный */
+  backdrop-filter: blur(1px);
+  pointer-events: auto;
+  z-index: 0;
+}
+
+.modal-window {
+  position: relative;
+  z-index: 1;
+  background: #fff;
+  border-radius: 20px;
+  box-shadow:
+    0 20px 50px rgba(2, 6, 23, 0.25),
+    0 2px 8px rgba(2, 6, 23, 0.10);
+  overflow: hidden; /* хедер фикс, скролл только в body-viewport */
+}
+
+/* ===== Заголовок ===== */
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.modal-title {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.modal-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+}
+
+/* ===== Тело: ВНЕШНИЙ вьюпорт со скроллом ===== */
+.modal-body-viewport {
+  /* вертикальный скролл ограничиваем по высоте вьюпорта */
+  max-height: calc(100vh - 180px);
+  overflow-y: auto;
+
+  /* ВАЖНО: горизонтальный скролл если контент шире окна */
+  overflow-x: auto;
+
+  /* чтобы на маленьких экранах окно не упиралось в края */
+  padding: 16px;
+}
+
+/* ===== Тело: ВНУТРЕННИЙ контейнер с естественной шириной ===== */
+.modal-body-content {
+  /* Берём естественную ширину контента;
+     если она > ширины окна — появится horizontal scroll */
+  width: max-content;
+
+  /* но не меньше самой ширины окна, чтобы не было "узких" модалок */
+  min-width: 100%;
+}
+
+/* Дополнительно: для широких форм в модалке (таблицы, гриды)
+   можно подсобить расстояниями между ячейками */
+.modal-body-content .form-grid,
+.modal-body-content .form-grid-2 {
+  gap: 12px;
+}
+
+/* Кнопка-иконка в хедере */
+.act.act--ghost {
+  background: transparent;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 4px 10px;
+  line-height: 1;
+}
+.act.act--ghost:hover { background: #f8fafc; }
+
+
+/* Модальное тело: чуть стабильнее скролл */
+.modal-body-viewport{
+  overscroll-behavior: contain;      /* гасим «подпрыгивания» на границах */
+  -webkit-overflow-scrolling: touch; /* инерция на тачпадах/iOS */
+  scrollbar-gutter: stable both-edges; /* убирает сдвиги при появлении полосы */
+}
+
+/* === Универсальный контейнер действий в таблицах === */
+/* Токен минимальной ширины колонки с иконками */
+:root{ --actions-minw: 140px; }
+
+/* Любая ячейка (th|td), где есть .act → inline-flex без переноса */
+table :is(th, td):has(.act){
+  display: flex;
+  justify-content: flex-end;      /* прижать иконки вправо; можно start */
+  align-items: center;
+  gap: var(--act-gap);             /* ЕДИНЫЕ отступы между иконками */
+  white-space: nowrap;             /* запрет переносов */
+  flex-wrap: nowrap;               /* жёстко в одну линию */
+  min-width: var(--actions-minw);  /* не сжимается меньше этого значения */
+}
+
+/* Внутри actions-ячейки убираем "цепной" margin-left, т.к. теперь gap рулит */
+table :is(th, td):has(.act) .act + .act{ margin-left: 0; }
+
+/* Иконка не должна схлопываться при сильном сужении */
+.act{ flex: 0 0 var(--act-size); }
+
+/* Шапка плана: две колонki, не растягиваются, прижаты слева */
+.ui-form.toolbar{
+  grid-template-columns: max-content max-content; /* вместо 1fr 1fr */
+  justify-content: start;
+  align-items: start;
+  gap: 12px 28px;         /* вертикальный / горизонтальный зазор */
+}
+
+/* На узких экранах — в одну колонку */
+@media (max-width: 1200px){
+  .ui-form.toolbar{ grid-template-columns: 1fr; }
+}
+
+/* Две колонки всегда рядом + горизонтальный скролл при нехватке ширины */
+.form-grid-2.toolbar{
+  display: grid;
+  grid-template-columns: max-content max-content; /* обе колонки по естественной ширине */
+  gap: 12px 28px;
+  align-items: start;
+
+  overflow-x: auto;                 /* скроллимся по X, вместо переноса */
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable both-edges;
+}
+
+/* Чтобы каждая колонка не сжималась и сохраняла свою ширину */
+.form-grid-2.toolbar > div{
+  min-width: max-content;
+}
+
+
+
+/* Мат. обеспеченность: красный крест / зелёная галка */
+.mrp-cover{
+  display:inline-block;
+  font-weight:700;
+  font-size:14px;
+  line-height:1;
+}
+.mrp-cover.bad{ color:#e11d48; }   /* красный */
+.mrp-cover.ok { color:#16a34a; }   /* зелёный */
+
+
+
+
+/* =============== UNIFIED TOOLTIPS =============== */
+/* Токены */
+:root{
+  --tip-bg: rgba(255,255,255,.98);
+  --tip-fg: #0f172a;
+  --tip-shadow: 0 8px 24px rgba(0,0,0,.18);
+  --tip-radius: 8px;
+  --tip-pad: 8px 10px;
+  --tip-maxw: 1000px;
+  --tip-minw: 200px;
+  --tip-offset: 6px;
+}
+
+/* База: только элементы с data-tip; не меняем display! */
+[data-tip]{
+  position: relative;      /* чтобы ::after позиционировался внутри */
+  cursor: help;
+}
+
+/* Сам тултип */
+[data-tip]::after{
+  content: attr(data-tip);
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translate(-50%, var(--tip-offset));
+  background: var(--tip-bg);
+  color: var(--tip-fg);
+  font-size: 12px;
+  line-height: 1.25;
+  padding: var(--tip-pad);
+  border-radius: var(--tip-radius);
+  box-shadow: var(--tip-shadow);
+  white-space: pre-line;
+  max-width: var(--tip-maxw);
+  min-width: var(--tip-minw);
+  text-align: left;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 1000;
+  transition: opacity .06s ease;
+}
+
+/* маленький хвостик под тултипом */
+[data-tip]::before{
+  content: "";
+  position: absolute;
+  top: calc(100% - 4px);
+  left: 50%;
+  transform: translateX(-50%) rotate(45deg);
+  width: 10px;
+  height: 10px;
+  background: var(--tip-bg);
+  border-left: 1px solid #e5e7eb;
+  border-top: 1px solid #e5e7eb;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 2001;
+  transition: opacity .06s ease;
+}
+
+
+
+/* Показать по hover/focus (фокус — для клавиатуры) */
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after{ opacity: 1; }
+
+/* Опциональные рамки-состояния */
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after,
+[data-tip]:hover::before,
+[data-tip]:focus-visible::before{ opacity: 1; }
+
+
+.cell-soft { border-radius: 0; }
+

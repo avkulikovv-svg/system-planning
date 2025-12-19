@@ -1,0 +1,31 @@
+  onSave: (m: Material) => void;
+  onCancel: () => void;
+  dicts: {
+    vendors: Vendor[];
+    addVendor: (name: string) => Vendor;
+    uoms: string[];
+    categories: string[];
+    addCategory: (name: string) => void;
+  };
+  ensureUniqueCode: (code: string, selfId?: string) => boolean;
+}) {
+  // ---------- state ----------
+  const [form, setForm] = React.useState<Material>(() => {
+    if (initial) {
+      // гарантия: category всегда строка
+      return { ...initial, category: (initial as any).category ?? "" };
+    }
+    const code = genCode("MAT");
+    return {
+      id: uid(),
+      code,
+      name: "",
+      vendorId: "",
+      uom: dicts.uoms[0] || "шт",
+      moq: 1,
+      leadTimeDays: 0,
+      price: undefined,
+      currency: "RUB",
+      category: "",
+    };
+  });

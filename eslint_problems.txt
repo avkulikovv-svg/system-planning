@@ -1,0 +1,41 @@
+[0m[0m
+[0m[4m/Users/Anton/Documents/IT/Система планирования/src/AppShell.tsx[24m[0m
+[0m   [2m142:10[22m   [31merror[39m    'ActionIcon' is defined but never used                                                                          [2m@typescript-eslint/no-unused-vars[22m[0m
+[0m   [2m161:10[22m   [31merror[39m    'useReceipts' is defined but never used                                                                         [2m@typescript-eslint/no-unused-vars[22m[0m
+[0m   [2m377:50[22m   [31merror[39m    Unexpected any. Specify a different type                                                                        [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m   [2m432:53[22m   [33mwarning[39m  React Hook useMemo has a missing dependency: 'computeErrors'. Either include it or remove the dependency array  [2mreact-hooks/exhaustive-deps[22m[0m
+[0m   [2m472:59[22m   [31merror[39m    Unexpected any. Specify a different type                                                                        [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m   [2m642:59[22m   [31merror[39m    Unexpected any. Specify a different type                                                                        [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m   [2m774:61[22m   [31merror[39m    Unexpected any. Specify a different type                                                                        [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m   [2m882:54[22m   [33mwarning[39m  React Hook useMemo has a missing dependency: 'computeErrors'. Either include it or remove the dependency array  [2mreact-hooks/exhaustive-deps[22m[0m
+[0m   [2m884:57[22m   [31merror[39m    Unexpected any. Specify a different type                                                                        [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m  [2m1007:35[22m   [31merror[39m    Unexpected any. Specify a different type                                                                        [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m  [2m1751:65[22m   [31merror[39m    Unexpected any. Specify a different type                                                                        [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m  [2m2034:131[22m  [31merror[39m    Unexpected any. Specify a different type                                                                        [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m  [2m2178:17[22m   [31merror[39m    Unexpected any. Specify a different type                                                                        [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m  [2m2187:17[22m   [31merror[39m    Unexpected any. Specify a different type                                                                        [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m  [2m2358:19[22m   [31merror[39m    'setVendors' is assigned a value but never used                                                                 [2m@typescript-eslint/no-unused-vars[22m[0m
+[0m  [2m2365:22[22m   [31merror[39m    'setWarehouses' is assigned a value but never used                                                              [2m@typescript-eslint/no-unused-vars[22m[0m
+[0m[0m
+[0m[4m/Users/Anton/Documents/IT/Система планирования/Старые/AppShell.patched.tsx[24m[0m
+[0m  [2m333:1[22m  [31merror[39m  Parsing error: Declaration or statement expected[0m
+[0m[0m
+[0m[4m/Users/Anton/Documents/IT/Система планирования/Старые/AppShell.tsx[24m[0m
+[0m   [2m132:10[22m   [31merror[39m    'usePlans' is defined but never used                                                                                  [2m@typescript-eslint/no-unused-vars[22m[0m
+[0m   [2m387:61[22m   [31merror[39m    Unexpected any. Specify a different type                                                                              [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m   [2m431:60[22m   [33mwarning[39m  React Hook React.useMemo has a missing dependency: 'computeErrors'. Either include it or remove the dependency array  [2mreact-hooks/exhaustive-deps[22m[0m
+[0m   [2m437:33[22m   [31merror[39m    Unexpected any. Specify a different type                                                                              [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m   [2m886:54[22m   [33mwarning[39m  React Hook useMemo has a missing dependency: 'computeErrors'. Either include it or remove the dependency array        [2mreact-hooks/exhaustive-deps[22m[0m
+[0m   [2m888:9[22m    [31merror[39m    'err' is assigned a value but never used                                                                              [2m@typescript-eslint/no-unused-vars[22m[0m
+[0m   [2m888:57[22m   [31merror[39m    Unexpected any. Specify a different type                                                                              [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m   [2m889:9[22m    [31merror[39m    'fld' is assigned a value but never used                                                                              [2m@typescript-eslint/no-unused-vars[22m[0m
+[0m  [2m1004:35[22m   [31merror[39m    Unexpected any. Specify a different type                                                                              [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m  [2m1567:65[22m   [31merror[39m    Unexpected any. Specify a different type                                                                              [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m  [2m1850:131[22m  [31merror[39m    Unexpected any. Specify a different type                                                                              [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m  [2m1994:17[22m   [31merror[39m    Unexpected any. Specify a different type                                                                              [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m  [2m2003:17[22m   [31merror[39m    Unexpected any. Specify a different type                                                                              [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m  [2m2248:17[22m   [31merror[39m    Unexpected any. Specify a different type                                                                              [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m  [2m2257:17[22m   [31merror[39m    Unexpected any. Specify a different type                                                                              [2m@typescript-eslint/no-explicit-any[22m[0m
+[0m[0m
+[0m[31m[1m✖ 32 problems (28 errors, 4 warnings)[22m[39m[0m
+[0m[31m[1m[22m[39m[0m
