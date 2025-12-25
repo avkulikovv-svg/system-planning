@@ -9,6 +9,7 @@ export type ResolveItemOptions = {
   legacyId?: string | null;
   uom?: string | null;
   category?: string | null;
+  groupName?: string | null;
   vendorName?: string | null;
   createIfMissing?: boolean;
 };
@@ -63,12 +64,13 @@ export async function resolveItemUuid(opts: ResolveItemOptions): Promise<string 
           status: "active",
           name: opts.name,
           uom: opts.uom || "шт",
-          category: opts.category || "",
           vendor_name: opts.vendorName || null,
           legacy_id: legacy || null,
           min_lot: 1,
           lead_days: 0,
         };
+        if (opts.category) payload.category = opts.category;
+        if (opts.groupName) payload.group_name = opts.groupName;
         const { data: inserted, error: insertErr } = await supabase
           .from("items")
           .insert(payload)
@@ -82,4 +84,3 @@ export async function resolveItemUuid(opts: ResolveItemOptions): Promise<string 
 
   return uuidPromises.get(cacheKey)!;
 }
-

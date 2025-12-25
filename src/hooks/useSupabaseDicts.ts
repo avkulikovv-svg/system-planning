@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { CategoryRecord, UomRecord, VendorRecord } from "../utils/dictsSupabase";
+import type { CategoryRecord, ItemGroupRecord, UomRecord, VendorRecord } from "../utils/dictsSupabase";
 import {
   createCategorySupabase,
+  createItemGroupSupabase,
   createUomSupabase,
   createVendorSupabase,
   deleteCategorySupabase,
+  deleteItemGroupSupabase,
   deleteUomSupabase,
   deleteVendorSupabase,
   fetchCategoriesSupabase,
+  fetchItemGroupsSupabase,
   fetchUomsSupabase,
   fetchVendorsSupabase,
+  renameItemGroupSupabase,
   renameUomSupabase,
   renameVendorSupabase,
   updateCategorySupabase,
@@ -84,6 +88,75 @@ export function useSupabaseUoms() {
   }, []);
 
   return { uoms, loading, refresh, addUom, renameUom, removeUom };
+}
+
+/* ================= Item Groups ================ */
+export function useSupabaseGroups() {
+  const [groups, setGroups] = useState<ItemGroupRecord[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const rows = await fetchItemGroupsSupabase();
+      setGroups(rows);
+    } catch (error) {
+      console.error("Failed to load groups", error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const addGroup = useCallback(
+    async (name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) return null;
+      const existing = groups.find(
+        (g) => g.name.trim().toLowerCase() === trimmed.toLowerCase()
+      );
+      if (existing) return existing;
+      try {
+        const rec = await createItemGroupSupabase(trimmed);
+        setGroups((prev) => sortByName([...prev, rec]));
+        return rec;
+      } catch (error) {
+        console.error("Failed to add group", error);
+        alert("Не удалось добавить группу в Supabase");
+        return null;
+      }
+    },
+    [groups]
+  );
+
+  const renameGroup = useCallback(async (id: string, currentName: string, nextName: string) => {
+    try {
+      await renameItemGroupSupabase(id, nextName, currentName);
+      setGroups((prev) =>
+        sortByName(
+          prev.map((g) => (g.id === id ? { ...g, name: nextName.trim() } : g))
+        )
+      );
+    } catch (error) {
+      console.error("Failed to rename group", error);
+      alert("Не удалось переименовать группу");
+    }
+  }, []);
+
+  const removeGroup = useCallback(async (id: string, name: string) => {
+    try {
+      await deleteItemGroupSupabase(id, name);
+      setGroups((prev) => prev.filter((g) => g.id !== id));
+    } catch (error) {
+      console.error("Failed to delete group", error);
+      alert("Не удалось удалить группу");
+    }
+  }, []);
+
+  return { groups, loading, refresh, addGroup, renameGroup, removeGroup };
 }
 
 /* ================= Categories ================ */

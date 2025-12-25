@@ -1,13 +1,13 @@
 // file: src/views/MaterialsView.tsx
 import React from "react";
-import { Plus, Pencil, Trash2, Check, FlaskConical } from "lucide-react";
+import { Plus, Pencil, Trash2, Check, FlaskConical, Search } from "lucide-react";
 // file: src/views/MaterialsView.tsx
 import SpecModal from "../components/specs/SpecModal";
 import { supabase } from "../api/supabaseClient";
 import { fetchSpecsFromSupabase } from "../utils/specSupabase";
 import { useSupabaseWarehouses } from "../hooks/useSupabaseDicts";
 import {
-  useSupabaseCategories,
+  useSupabaseGroups,
   useSupabaseUoms,
   useSupabaseVendors,
 } from "../hooks/useSupabaseDicts";
@@ -22,12 +22,10 @@ type BaseItem = {
   status: string; // 'active' | 'archived'
   code: string;
   name: string;
-  category?: string;
+  group?: string;
   uom?: string;
-
   vendorId?: string; // современная модель
   vendorName?: string; // legacy
-
   price?: number;
   minLot?: number;
   leadDays?: number;
@@ -96,31 +94,38 @@ function MaterialForm({
   dicts,
   ensureUniqueCode,
   onRequestOpenSpec, // для полуфабрикатов
+  specs,
+  initialSpecId,
   isSemi,
 }: {
   initial: BaseItem | null;
-  onSave: (m: BaseItem) => void;
+  onSave: (
+    m: BaseItem,
+    opts?: { attachSpecId?: string; detachSpecId?: string }
+  ) => void;
   onCancel: () => void;
   dicts: {
     vendors: Vendor[];
     addVendor: (name: string) => Promise<Vendor | null>;
     uoms: string[];
-    categories: string[];
-    addCategory: (name: string) => Promise<void>;
+    groups: string[];
+    addGroup: (name: string) => Promise<void>;
   };
   ensureUniqueCode: (code: string, selfId?: string) => boolean;
   onRequestOpenSpec?: (draft: BaseItem) => void;
+  specs?: Spec[];
+  initialSpecId?: string;
   isSemi?: boolean;
 }) {
   const [form, setForm] = React.useState<BaseItem>(() => {
-    if (initial) return { ...initial, category: initial.category ?? "" };
+    if (initial) return { ...initial, group: initial.group ?? "" };
     return {
       id: uid(),
       status: "active",
       code: "",
       name: "",
       uom: dicts.uoms[0] || "шт",
-      category: "",
+      group: "",
       vendorId: "",
       minLot: 1,
       leadDays: 0,
@@ -147,15 +152,20 @@ function MaterialForm({
     return Number.isFinite(n) ? n : def;
   };
 
-  type Errs = Partial<Record<"code" | "name" | "uom" | "category", string>>;
+  type Errs = Partial<Record<"code" | "name" | "uom" | "group", string>>;
   const [showErrors, setShowErrors] = React.useState(false);
+  const [specId, setSpecId] = React.useState<string>(initialSpecId || "");
+
+  React.useEffect(() => {
+    setSpecId(initialSpecId || "");
+  }, [initialSpecId]);
 
   const computeErrors = (draft: BaseItem): Errs => {
     const e: Errs = {};
     if (!draft.code?.trim()) e.code = "Обязательное поле";
     if (!draft.name?.trim()) e.name = "Обязательное поле";
     if (!draft.uom?.trim()) e.uom = "Выберите единицу";
-    if (!draft.category?.trim()) e.category = "Выберите категорию";
+    if (!draft.group?.trim()) e.group = "Выберите группу";
     if (
       draft.code?.trim() &&
       !ensureUniqueCode(draft.code.trim(), draft.id)
@@ -176,11 +186,11 @@ function MaterialForm({
       setTimeout(() => vendorRef.current?.focus(), 0);
     }
   };
-  const onAddCategory = async () => {
-    const nm = (window.prompt("Новая категория") ?? "").trim();
+  const onAddGroup = async () => {
+    const nm = (window.prompt("Новая группа") ?? "").trim();
     if (!nm) return;
-    await dicts.addCategory(nm);
-    set("category", nm);
+    await dicts.addGroup(nm);
+    set("group", nm);
     setTimeout(() => catRef.current?.focus(), 0);
   };
 
@@ -201,7 +211,7 @@ function MaterialForm({
         uomRef.current?.focus();
         return;
       }
-      if (eMap.category) {
+      if (eMap.group) {
         catRef.current?.focus();
         return;
       }
@@ -217,9 +227,14 @@ function MaterialForm({
         form.price == null || Number.isNaN(form.price as any)
           ? undefined
           : Number(form.price),
-      category: form.category?.trim() || "",
+      group: form.group?.trim() || "",
     };
-    onSave(cleaned);
+    const detachSpecId =
+      !specId && initialSpecId ? initialSpecId : undefined;
+    onSave(cleaned, {
+      attachSpecId: specId || undefined,
+      detachSpecId,
+    });
   };
 
   return (
@@ -252,7 +267,7 @@ function MaterialForm({
           <div className="form-label">Ед. изм. *</div>
           <select
             ref={uomRef}
-            className="form-control"
+            className="form-control mrp-select"
             data-invalid={!!err("uom")}
             value={form.uom || ""}
             onChange={(e) => set("uom", e.target.value)}
@@ -295,19 +310,48 @@ function MaterialForm({
           )}
         </div>
 
-        {/* Категория */}
+        {isSemi && specs?.length ? (
+          <div className="form-span-2">
+            <div className="form-label">Спецификация (выбрать существующую)</div>
+            <select
+              className="form-control mrp-select"
+              value={specId}
+              onChange={(e) => setSpecId(e.target.value)}
+            >
+              <option value="">— не выбрана —</option>
+              {[...specs]
+                .sort((a, b) => {
+                  const aKey = `${a.productCode || ""} ${a.productName || ""}`.trim();
+                  const bKey = `${b.productCode || ""} ${b.productName || ""}`.trim();
+                  return aKey.localeCompare(bKey, "ru");
+                })
+                .map((sp) => {
+                  const label = sp.productCode
+                    ? `${sp.productCode} — ${sp.productName}`
+                    : sp.productName;
+                  return (
+                    <option key={sp.id} value={sp.id}>
+                      {label}
+                    </option>
+                  );
+                })}
+            </select>
+          </div>
+        ) : null}
+
+        {/* Группа */}
         <div>
-          <div className="form-label">Категория *</div>
+          <div className="form-label">Группа *</div>
           <div className="spec-inline">
             <select
               ref={catRef}
-              className="form-control"
-              data-invalid={!!err("category")}
-              value={form.category ?? ""}
-              onChange={(e) => set("category", e.target.value)}
+              className="form-control mrp-select"
+              data-invalid={!!err("group")}
+              value={form.group ?? ""}
+              onChange={(e) => set("group", e.target.value)}
             >
               <option value=""></option>
-              {dicts.categories.map((c) => (
+              {dicts.groups.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>
@@ -315,15 +359,15 @@ function MaterialForm({
             </select>
             <button
               type="button"
-              className="icon-btn"
-              title="Добавить категорию"
-              onClick={onAddCategory}
+              className="mrp-icon-btn"
+              title="Добавить группу"
+              onClick={onAddGroup}
             >
               <Plus className="w-4 h-4" />
             </button>
           </div>
-          {showErrors && err("category") && (
-            <div className="form-help">{err("category")}</div>
+          {showErrors && err("group") && (
+            <div className="form-help">{err("group")}</div>
           )}
         </div>
 
@@ -333,7 +377,7 @@ function MaterialForm({
           <div className="spec-inline">
             <select
               ref={vendorRef}
-              className="form-control"
+              className="form-control mrp-select"
               value={form.vendorId ?? ""}
               onChange={(e) => set("vendorId", e.target.value || undefined)}
             >
@@ -346,7 +390,7 @@ function MaterialForm({
             </select>
             <button
               type="button"
-              className="icon-btn"
+              className="mrp-icon-btn"
               title="Добавить поставщика"
               onClick={onAddVendor}
             >
@@ -363,10 +407,13 @@ function MaterialForm({
             min={1}
             step={1}
             className="form-control"
-            value={form.minLot ?? 1}
-            onChange={(e) =>
-              set("minLot", Math.max(1, normNum(e.target.value, 1)))
-            }
+            value={form.minLot ?? ""}
+            onChange={(e) => {
+              const raw = e.target.value;
+              if (raw === "") { set("minLot", undefined as any); return; }
+              set("minLot", Math.max(1, normNum(raw, 1)));
+            }}
+            placeholder="1"
           />
         </div>
 
@@ -378,10 +425,13 @@ function MaterialForm({
             min={0}
             step={1}
             className="form-control"
-            value={form.leadDays ?? 0}
-            onChange={(e) =>
-              set("leadDays", Math.max(0, normNum(e.target.value, 0)))
-            }
+            value={form.leadDays ?? ""}
+            onChange={(e) => {
+              const raw = e.target.value;
+              if (raw === "") { set("leadDays", undefined as any); return; }
+              set("leadDays", Math.max(0, normNum(raw, 0)));
+            }}
+            placeholder="0"
           />
         </div>
 
@@ -401,6 +451,7 @@ function MaterialForm({
             placeholder="0.00"
           />
         </div>
+
       </div>
 
       <div className="mt-3 flex items-center justify-end gap-2">
@@ -425,6 +476,20 @@ const isUuid = (s?: string | null) =>
     s
   );
 
+const mapItemRow = (row: any): BaseItem => ({
+  id: row.id,
+  status: row.status ?? "active",
+  code: row.code,
+  name: row.name,
+  uom: row.uom || "шт",
+  group: row.group_name || "",
+  vendorId: row.vendor_id || "",
+  vendorName: row.vendor_name || undefined,
+  price: row.price ?? undefined,
+  minLot: row.min_lot ?? 1,
+  leadDays: row.lead_days ?? 0,
+});
+
 
 /* ========= Экран «Материалы | Полуфабрикаты» ========= */
 export default function MaterialsView() {
@@ -438,22 +503,31 @@ export default function MaterialsView() {
 
   const [kind, setKind] = useLocalState<NomenKind>("mrp.purch.kind", "material");
   const [query, setQuery] = useLocalState<string>("mrp.purch.search", "");
+  const [sortState, setSortState] = React.useState<{
+    key: "code" | "name" | "vendor" | "group";
+    dir: "asc" | "desc";
+  }>({ key: "name", dir: "asc" });
 
   // словари (единые, Supabase)
   const { uoms: uomRecords } = useSupabaseUoms();
-  const { categories: categoryRecords, addCategory: addCategorySupabase } = useSupabaseCategories();
+  const { groups: groupRecords, addGroup: addGroupSupabase } = useSupabaseGroups();
   const { vendors, addVendor: addVendorSupabase } = useSupabaseVendors();
+  const vendorById = React.useMemo(() => {
+    const map = new Map<string, string>();
+    vendors.forEach((v) => map.set(v.id, v.name));
+    return map;
+  }, [vendors]);
   const uoms = React.useMemo(() => uomRecords.map((u) => u.name), [uomRecords]);
-  const categories = React.useMemo(() => categoryRecords.map((c) => c.name), [categoryRecords]);
+  const groups = React.useMemo(() => groupRecords.map((g) => g.name), [groupRecords]);
   const addVendor = React.useCallback(
     (name: string) => addVendorSupabase(name),
     [addVendorSupabase]
   );
-  const addCategory = React.useCallback(
+  const addGroup = React.useCallback(
     async (name: string) => {
-      await addCategorySupabase(name);
+      await addGroupSupabase(name);
     },
-    [addCategorySupabase]
+    [addGroupSupabase]
   );
 
   const list = kind === "material" ? materialsAll : semisAll;
@@ -477,19 +551,7 @@ React.useEffect(() => {
       return;
     }
 
-    const mapped: BaseItem[] = (data || []).map((row: any) => ({
-      id: row.id, // UUID из БД
-      status: row.status ?? "active",
-      code: row.code,
-      name: row.name,
-      uom: row.uom || "шт",
-      category: row.category || "",
-      vendorId: row.vendor_id || "",
-      vendorName: row.vendor_name || undefined,
-      price: row.price ?? undefined,
-      minLot: row.min_lot ?? 1,
-      leadDays: row.lead_days ?? 0,
-    }));
+    const mapped: BaseItem[] = (data || []).map(mapItemRow);
 
     // карта legacy_id → uuid
     const newMap: Record<string, string> = {};
@@ -515,19 +577,46 @@ React.useEffect(() => {
   const items = React.useMemo<BaseItem[]>(() => {
     const norm = (s?: string) => (s || "").toLowerCase().trim();
     const q = norm(query);
-    return (list || [])
+    const getVendor = (m: BaseItem) =>
+      (m.vendorId ? vendorById.get(m.vendorId) : m.vendorName) || "";
+    const filtered = (list || [])
       .filter((m) => (m.status ?? "active") !== "archived")
       .filter(
         (m) =>
           !q ||
           norm(m.code).includes(q) ||
           norm(m.name).includes(q) ||
-          norm(m.category).includes(q) ||
-          norm(
-            vendors.find((v) => v.id === m.vendorId)?.name ?? m.vendorName
-          ).includes(q)
+          norm(m.group).includes(q) ||
+          norm(getVendor(m)).includes(q)
       );
-  }, [list, query, vendors]);
+    const dir = sortState.dir === "asc" ? 1 : -1;
+    const getValue = (m: BaseItem) => {
+      if (sortState.key === "code") return m.code || "";
+      if (sortState.key === "name") return m.name || "";
+      if (sortState.key === "group") return m.group || "";
+      return getVendor(m);
+    };
+    return [...filtered].sort((a, b) =>
+      getValue(a).localeCompare(getValue(b), "ru", { sensitivity: "base" }) * dir
+    );
+  }, [list, query, sortState, vendorById]);
+
+  const handleSort = (key: "code" | "name" | "vendor" | "group") => {
+    setSortState((prev) => {
+      if (prev.key !== key) return { key, dir: "asc" };
+      return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
+    });
+  };
+
+  const sortArrows = (key: "code" | "name" | "vendor" | "group") => {
+    const isActive = sortState.key === key;
+    return (
+      <span className={`wbwh-sort ${isActive ? "is-active" : ""}`} aria-hidden="true">
+        <span className={`wbwh-sort__arrow ${isActive && sortState.dir === "asc" ? "is-selected" : ""}`}>▲</span>
+        <span className={`wbwh-sort__arrow ${isActive && sortState.dir === "desc" ? "is-selected" : ""}`}>▼</span>
+      </span>
+    );
+  };
 
   /* ---- склады ---- */
   const {
@@ -921,6 +1010,58 @@ React.useEffect(() => {
   }, [reloadSpecs]);
   const findSpecForSemi = (s: Semi) =>
     specs.find((sp) => sp.productId === s.id || sp.productCode === s.code);
+  const linkSpecToSemi = React.useCallback(
+    async (specId: string, semi: BaseItem) => {
+      if (!specId) return;
+      const legacyId = semi?.id?.trim();
+      if (!legacyId) return;
+      const { data, error } = await supabase
+        .from("items")
+        .select("id")
+        .eq("legacy_id", legacyId)
+        .eq("kind", "semi")
+        .limit(1);
+      if (error) {
+        console.error("Ошибка поиска полуфабриката:", error);
+        return;
+      }
+      const linkedId = data?.[0]?.id as string | undefined;
+      if (!linkedId) return;
+      const { error: linkErr } = await supabase
+        .from("specs")
+        .update({
+          linked_product_id: linkedId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", specId);
+      if (linkErr) {
+        console.error("Ошибка привязки спецификации:", linkErr);
+        alert("Не удалось привязать спецификацию, смотри консоль");
+        return;
+      }
+      await reloadSpecs();
+    },
+    [reloadSpecs],
+  );
+  const unlinkSpecFromSemi = React.useCallback(
+    async (specId: string) => {
+      if (!specId) return;
+      const { error } = await supabase
+        .from("specs")
+        .update({
+          linked_product_id: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", specId);
+      if (error) {
+        console.error("Ошибка отвязки спецификации:", error);
+        alert("Не удалось отвязать спецификацию, смотри консоль");
+        return;
+      }
+      await reloadSpecs();
+    },
+    [reloadSpecs],
+  );
 
   /* ---- планы и параметры диапазона ---- */
 const [planMapFG]   = useLocalState<Record<string, Record<string, number>>>("mrp.plan.fg.planMap.v1", {});
@@ -1150,7 +1291,7 @@ const coverDaysBySemiId = React.useMemo(() => {
       code: "",
       name: "",
       uom: uoms[0] || "шт",
-      category: "",
+      group: "",
       vendorId: "",
       price: undefined,
       minLot: 1,
@@ -1164,15 +1305,19 @@ const coverDaysBySemiId = React.useMemo(() => {
     setModalOpen(true);
   };
 
-const saveForm = async (m: BaseItem) => {
+const saveForm = async (
+  m: BaseItem,
+  opts?: { attachSpecId?: string; detachSpecId?: string }
+) => {
   const currentKind = kind === "material" ? "material" : "semi";
 
-    const payload: any = {
+  const payload: any = {
       kind: currentKind,
       code: m.code,
       name: m.name,
       uom: m.uom || "шт",
-      category: m.category || "",
+      category: m.group?.trim() || "Без категории",
+      group_name: m.group || "",
       vendor_name:
         vendors.find((v) => v.id === m.vendorId)?.name ?? m.vendorName ?? null,
       price: m.price ?? null,
@@ -1182,17 +1327,27 @@ const saveForm = async (m: BaseItem) => {
       legacy_id: isUuid(m.id) ? null : m.id,      // 👈 ВАЖНО: кладём старый id в legacy_id
     };
 
-
-  // НИКАКИХ payload.id здесь не передаём.
-  // Supabase сам создаст/оставит uuid в id, а мы работаем через legacy_id.
-  const { error } = await supabase.from("items").upsert(payload, {
-    onConflict: "legacy_id",
-  });
+  let error: any = null;
+  if (isUuid(m.id)) {
+    const res = await supabase.from("items").update(payload).eq("id", m.id);
+    error = res.error;
+  } else {
+    const res = await supabase.from("items").upsert(payload, {
+      onConflict: "legacy_id",
+    });
+    error = res.error;
+  }
 
   if (error) {
     console.error("Ошибка upsert items:", error);
     alert("Не удалось сохранить запись в базе, смотри консоль");
     return;
+  }
+
+  if (currentKind === "semi" && opts?.attachSpecId) {
+    await linkSpecToSemi(opts.attachSpecId, m);
+  } else if (currentKind === "semi" && opts?.detachSpecId) {
+    await unlinkSpecFromSemi(opts.detachSpecId);
   }
 
   // после сохранения — перезагружаем список из Supabase (на тот же маппинг, что и в useEffect)
@@ -1205,19 +1360,7 @@ const saveForm = async (m: BaseItem) => {
   if (loadError) {
     console.error("Ошибка перезагрузки items:", loadError);
   } else {
-    const mapped: BaseItem[] = (data || []).map((row: any) => ({
-  id: row.id, // ✅ ТОЛЬКО uuid
-  status: row.status ?? "active",
-  code: row.code,
-  name: row.name,
-  uom: row.uom || "шт",
-  category: row.category || "",
-  vendorId: row.vendor_id || "",
-  vendorName: row.vendor_name || undefined,
-  price: row.price ?? undefined,
-  minLot: row.min_lot ?? 1,
-  leadDays: row.lead_days ?? 0,
-}));
+    const mapped: BaseItem[] = (data || []).map(mapItemRow);
 
 
     if (currentKind === "material") {
@@ -1259,19 +1402,7 @@ const saveForm = async (m: BaseItem) => {
       return;
     }
 
-    const mapped: BaseItem[] = (data || []).map((row: any) => ({
-      id: row.id,
-      status: row.status ?? "active",
-      code: row.code,
-      name: row.name,
-      uom: row.uom || "шт",
-      category: row.category || "",
-      vendorId: row.vendor_id || "",
-      vendorName: row.vendor_name || undefined,
-      price: row.price ?? undefined,
-      minLot: row.min_lot ?? 1,
-      leadDays: row.lead_days ?? 0,
-    }));
+    const mapped: BaseItem[] = (data || []).map(mapItemRow);
 
     if (currentKind === "material") {
       setMaterialsAll(mapped as Material[]);
@@ -1307,95 +1438,105 @@ const saveForm = async (m: BaseItem) => {
 
   return (
     <div className="mrp-page">
+      <div className="mrp-page-head">
+        <div className="mrp-title-row">
+          <h1 className="mrp-title">{title}</h1>
+          <span className="mrp-count">{items.length}</span>
+        </div>
+        <div className="mrp-actions">
+          <button type="button" className="mrp-btn mrp-btn--primary" onClick={openCreate}>
+            <Plus className="w-4 h-4" /> Добавить
+          </button>
+        </div>
+      </div>
+
       <div className="mrp-card">
-        {/* Шапка */}
-        <div className="ui-form form-grid-2 toolbar mb-2">
-          <div>
-            <div className="row-inline" style={{ gap: 8, marginBottom: 6 }}>
-              <button
-                type="button"
-                className={`app-pill app-pill--sm ${
-                  kind === "material" ? "is-active" : ""
-                }`}
-                onClick={() => setKind("material")}
-              >
-                Материалы
-              </button>
-              <button
-                type="button"
-                className={`app-pill app-pill--sm ${
-                  kind === "semi" ? "is-active" : ""
-                }`}
-                onClick={() => setKind("semi")}
-              >
-                Полуфабрикаты
-              </button>
-
-              <span style={{ marginLeft: 8 }} />
-              <button
-                type="button"
-                className="app-pill app-pill--sm is-active"
-                onClick={openCreate}
-              >
-                <Plus className="w-4 h-4" /> Добавить
-              </button>
-            </div>
-
-            <div className="form-row">
-              <span className="form-label">Поиск</span>
+        <div className="mrp-toolbar">
+          <div className="mrp-toolbar__left">
+            <button
+              type="button"
+              className={`mrp-chip ${kind === "material" ? "is-active" : ""}`}
+              onClick={() => setKind("material")}
+            >
+              Материалы
+            </button>
+            <button
+              type="button"
+              className={`mrp-chip ${kind === "semi" ? "is-active" : ""}`}
+              onClick={() => setKind("semi")}
+            >
+              Полуфабрикаты
+            </button>
+            <div className="mrp-search-input">
+              <Search className="w-4 h-4" />
               <input
-                className="form-control"
-                placeholder={`${title}: код / наименование / категория / поставщик`}
+                placeholder={`${title}: код / наименование / группа / поставщик`}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
             </div>
           </div>
 
-          <div>
-            <div className="form-row">
-              <div className="row-inline" style={{ gap: 12 }}>
-                <div>
-                  <span className="form-label">Склад</span>
-                  <select
-                    className="form-control"
-                    value={physId}
-                    onChange={(e) => setPhysId(e.target.value)}
-                  >
-                    {physical.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <button
-                  type="button"
-                  className="app-pill app-pill--sm"
-                  disabled={stagedCount === 0}
-                  onClick={postAll}
-                  title={
-                    stagedCount === 0
-                      ? "Нет строк с приходом"
-                      : `Провести ${stagedCount}`
-                  }
-                >
-                  Провести все ({stagedCount})
-                </button>
-              </div>
+          <div className="mrp-toolbar__right">
+            <div className="mrp-field">
+              <span className="mrp-field__label">Склад</span>
+              <select
+                className="mrp-select"
+                value={physId}
+                onChange={(e) => setPhysId(e.target.value)}
+              >
+                {physical.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
             </div>
+            <button
+              type="button"
+              className="mrp-btn mrp-btn--ghost"
+              disabled={stagedCount === 0}
+              onClick={postAll}
+              title={
+                stagedCount === 0
+                  ? "Нет строк с приходом"
+                  : `Провести ${stagedCount}`
+              }
+            >
+              Провести все ({stagedCount})
+            </button>
           </div>
         </div>
 
         {/* Таблица */}
         <div className="mrp-hscroll">
-          <table className="min-w-full text-sm table-compact">
+          <table className="mrp-table text-sm">
             <thead>
               <tr>
-                <th className="text-left px-2 py-2 w-[170px]">Код</th>
-                <th className="text-left px-2 py-2">{title}</th>
-                <th className="text-left px-2 py-2 w-[160px]">Поставщик</th>
-                <th className="text-left px-2 py-2 w-[120px]">Категория</th>
+                <th
+                  className="text-left px-2 py-2 w-[170px] wbwh-sortable"
+                  onClick={() => handleSort("code")}
+                >
+                  Код{sortArrows("code")}
+                </th>
+                <th
+                  className="text-left px-2 py-2 wbwh-sortable"
+                  onClick={() => handleSort("name")}
+                >
+                  {title}{sortArrows("name")}
+                </th>
+                <th
+                  className="text-left px-2 py-2 w-[160px] wbwh-sortable"
+                  onClick={() => handleSort("vendor")}
+                >
+                  Поставщик{sortArrows("vendor")}
+                </th>
+                <th
+                  className="text-left px-2 py-2 w-[120px] wbwh-sortable"
+                  onClick={() => handleSort("group")}
+                >
+                  Группа{sortArrows("group")}
+                </th>
                 <th className="text-left px-2 py-2 w-[60px]">Ед.</th>
                 <th className="text-right px-2 py-2 w-[110px]">Остаток</th>
                 <th className="text-left px-2 py-2 w-[130px]">Дата</th>
@@ -1425,25 +1566,32 @@ const saveForm = async (m: BaseItem) => {
                     key={it.id}
                     className="border-t border-slate-200 hover:bg-slate-50"
                   >
-                    <td className="px-2 py-2">{it.code}</td>
+                    <td className="px-2 py-2">
+                      <span className="mrp-code">{it.code}</span>
+                    </td>
                     <td className="px-2 py-2">{it.name}</td>
                     <td className="px-2 py-2">{vendorTitle}</td>
-                    <td className="px-2 py-2">{it.category || ""}</td>
+                    <td className="px-2 py-2">{it.group || ""}</td>
                     <td className="px-2 py-2">{it.uom || ""}</td>
                   {(() => {
                   // выбираем карту покрытия по типу
-                  const daysCover =
+                  const rawDaysCover =
                     (kind === "material"
                       ? coverDaysByMatId.get(it.id!)
                       : coverDaysBySemiId.get(it.id!)
                     ) ?? 999;
+                  const leadDays = Number(it.leadDays ?? 0);
+                  const adjDaysCover =
+                    rawDaysCover >= 999 ? 999 : rawDaysCover - leadDays;
 
                   const lo = 3, hi = 10;
-                  const t = Math.max(0, Math.min(1, (daysCover - lo) / (hi - lo))); // 0..1
+                  const t = Math.max(0, Math.min(1, (adjDaysCover - lo) / (hi - lo))); // 0..1
                   const hue = Math.round(0 + t * 120);   // 0=красный → 120=зелёный
                   const bg  = `hsl(${hue} 90% 95% / 1)`;
                   const br  = `hsl(${hue} 85% 55% / 1)`;
-                  const title = `Покрытие: ${daysCover >= 999 ? "∞" : daysCover} дн.`;
+                  const title = `Покрытие: ${
+                    rawDaysCover >= 999 ? "∞" : rawDaysCover
+                  } дн., срок поставки ${leadDays || 0} дн.`;
 
                   return (
                     <td
@@ -1496,7 +1644,7 @@ const saveForm = async (m: BaseItem) => {
                     <td className="px-2 py-2">
                       <div className="flex items-center justify-end gap-3">
                         <button
-                          className="act"
+                          className="act act--ghost"
                           data-action="post"
                           title="Провести приход"
                           onClick={() => postOne(it)}
@@ -1504,7 +1652,7 @@ const saveForm = async (m: BaseItem) => {
                           <Check className="w-4 h-4" />
                         </button>
                         <button
-                          className="act"
+                          className="act act--ghost"
                           data-action="edit"
                           title="Редактировать"
                           onClick={() => openEdit(it)}
@@ -1514,7 +1662,7 @@ const saveForm = async (m: BaseItem) => {
 
                         {isSemiRow && (
                           <button
-                            className="act"
+                            className="act act--ghost"
                             data-action="spec"
                             title={
                               spec
@@ -1528,7 +1676,7 @@ const saveForm = async (m: BaseItem) => {
                         )}
 
                         <button
-                          className="act"
+                          className="act act--ghost"
                           data-action="delete"
                           title="Удалить"
                           onClick={() => deleteOne(it)}
@@ -1583,9 +1731,15 @@ const saveForm = async (m: BaseItem) => {
                   initial={form}
                   onCancel={() => setModalOpen(false)}
                   onSave={saveForm}
-                  dicts={{ vendors, addVendor, uoms, categories, addCategory }}
+                  dicts={{ vendors, addVendor, uoms, groups, addGroup }}
                   ensureUniqueCode={ensureUniqueCode}
                   isSemi={kind === "semi"}
+                  specs={kind === "semi" ? specs : undefined}
+                  initialSpecId={
+                    kind === "semi" && form
+                      ? findSpecForSemi(form as Semi)?.id
+                      : undefined
+                  }
                   onRequestOpenSpec={
                     kind === "semi"
                       ? (draft) => {

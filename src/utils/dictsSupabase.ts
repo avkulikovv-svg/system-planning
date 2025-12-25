@@ -3,6 +3,7 @@ import { supabase } from "../api/supabaseClient";
 export type UomRecord = { id: string; name: string };
 export type CategoryRecord = { id: string; name: string; kind: "fg" | "mat" | "both" };
 export type VendorRecord = { id: string; name: string };
+export type ItemGroupRecord = { id: string; name: string };
 
 // ----- UOMs -----
 export async function fetchUomsSupabase(): Promise<UomRecord[]> {
@@ -32,6 +33,47 @@ export async function renameUomSupabase(id: string, name: string): Promise<void>
 export async function deleteUomSupabase(id: string): Promise<void> {
   const { error } = await supabase.from("uoms").delete().eq("id", id);
   if (error) throw error;
+}
+
+// ----- Item groups -----
+export async function fetchItemGroupsSupabase(): Promise<ItemGroupRecord[]> {
+  const { data, error } = await supabase
+    .from("item_groups")
+    .select("id, name")
+    .order("name", { ascending: true });
+  if (error) throw error;
+  return (data || []) as ItemGroupRecord[];
+}
+
+export async function createItemGroupSupabase(name: string): Promise<ItemGroupRecord> {
+  const { data, error } = await supabase
+    .from("item_groups")
+    .insert({ name: name.trim() })
+    .select("id, name")
+    .single();
+  if (error) throw error;
+  return data as ItemGroupRecord;
+}
+
+export async function renameItemGroupSupabase(id: string, nextName: string, prevName: string): Promise<void> {
+  const trimmed = nextName.trim();
+  const { error } = await supabase.from("item_groups").update({ name: trimmed }).eq("id", id);
+  if (error) throw error;
+  const { error: updErr } = await supabase
+    .from("items")
+    .update({ group_name: trimmed })
+    .eq("group_name", prevName);
+  if (updErr) throw updErr;
+}
+
+export async function deleteItemGroupSupabase(id: string, name: string): Promise<void> {
+  const { error } = await supabase.from("item_groups").delete().eq("id", id);
+  if (error) throw error;
+  const { error: updErr } = await supabase
+    .from("items")
+    .update({ group_name: null })
+    .eq("group_name", name);
+  if (updErr) throw updErr;
 }
 
 // ----- Categories -----

@@ -5,8 +5,8 @@ import { upsertSpecSupabase } from "../../utils/specSupabase";
 import { useSupabaseUoms, useSupabaseVendors } from "../../hooks/useSupabaseDicts";
 
 /* ========= Типы ========= */
-type Material = { id: string; code: string; name: string; uom?: string; category?: string; status?: string; vendorId?: string };
-type Semi     = { id: string; code: string; name: string; uom?: string; category?: string; status?: string };
+type Material = { id: string; code: string; name: string; uom?: string; group?: string; status?: string; vendorId?: string };
+type Semi     = { id: string; code: string; name: string; uom?: string; group?: string; status?: string };
 type Vendor   = { id: string; name: string };
 
 type SpecLine = {
@@ -77,8 +77,12 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
 
   React.useEffect(() => {
     if (!open) return;
-    const needMaterials = materials.length === 0 || materials.some((m) => !isUuid(m.id));
-    const needSemis = semis.length === 0 || semis.some((s) => !isUuid(s.id));
+    const needMaterials =
+      materials.length === 0 ||
+      materials.some((m) => !isUuid(m.id) || !m.uom);
+    const needSemis =
+      semis.length === 0 ||
+      semis.some((s) => !isUuid(s.id) || !s.uom);
     if (!needMaterials && !needSemis) return;
 
     let aborted = false;
@@ -87,7 +91,7 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
       try {
         const { data, error } = await supabase
           .from("items")
-          .select("id, kind, code, name, uom, category, vendor_id, vendor_name")
+          .select("id, kind, code, name, uom, group_name, vendor_id, vendor_name")
           .in("kind", ["material", "semi"]);
         if (error) throw error;
         if (aborted) return;
@@ -97,7 +101,7 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
           code: string;
           name: string;
           uom?: string;
-          category?: string;
+          group?: string;
           vendorId?: string;
         }> = (data || []).map((row: any) => ({
           kind: (row.kind as "material" | "semi") ?? "material",
@@ -105,7 +109,7 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
           code: row.code as string,
           name: row.name as string,
           uom: row.uom || "",
-          category: row.category || "",
+          group: row.group_name || "",
           vendorId: row.vendor_id || undefined,
         }));
         if (needMaterials) {
@@ -151,6 +155,25 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
 
   const dictFor = (k: "mat"|"semi") => (k === "mat" ? materials : semis);
   const findById = (k: "mat"|"semi", id?: string) => (id ? dictFor(k).find(x => x.id === id) : undefined);
+
+  React.useEffect(() => {
+    if (!draft.lines.length) return;
+    if (!materials.length && !semis.length) return;
+    let changed = false;
+    const nextLines = draft.lines.map((ln) => {
+      const n = normalizeLine(ln);
+      const src = findById(n.kind || "mat", n.refId);
+      if (!src?.uom) return n;
+      if (!n.uom || (n.uom === "шт" && src.uom !== "шт")) {
+        changed = true;
+        return { ...n, uom: src.uom };
+      }
+      return n;
+    });
+    if (changed) {
+      setDraft((d) => ({ ...d, lines: nextLines }));
+    }
+  }, [draft.lines, materials, semis]);
 
   const addLine = (kind: "mat" | "semi" = "mat") =>
     setDraft(d => ({ ...d, lines: [...d.lines, { id: uid(), kind, refId: "", qty: 0, uom: uoms[0] || "" }] }));
@@ -283,7 +306,7 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
 
           {/* Таблица строк (компактная) */}
           <div className="table-wrapper mt-3">
-            <table className="min-w-full text-sm table-compact">
+            <table className="mrp-table text-sm table-compact">
               <thead>{headerRow}</thead>
               <tbody>
                 {draft.lines.map((ln) => {
@@ -296,7 +319,7 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
                       {/* Тип */}
                       <td className="px-2 py-[6px]">
                         <select
-                          className="form-control"
+                          className="form-control mrp-select"
                           value={n.kind}
                           onChange={(e) => updateLine(n.id, { kind: e.target.value as "mat" | "semi", refId: "" })}
                         >
@@ -308,7 +331,7 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
                       {/* Код (селект по коду, узкий) */}
                       <td className="px-2 py-[6px]" style={{ width: 90 }}>
                         <select
-                          className="form-control"
+                          className="form-control mrp-select"
                           style={{ width: 90 }}
                           value={n.refId}
                           onChange={(e) => {
@@ -328,7 +351,7 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
                       {/* Наименование (селект по имени) */}
                       <td className="px-2 py-[6px]">
                         <select
-                          className="form-control"
+                          className="form-control mrp-select"
                           style={{ minWidth: 220 }}
                           value={n.refId}
                           onChange={(e) => {
@@ -351,15 +374,19 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
                           type="number"
                           min={0}
                           step="any"
-                          value={Number.isFinite(n.qty) ? n.qty : 0}
-                          onChange={(e) => updateLine(n.id, { qty: Number(e.target.value) || 0 })}
+                          value={n.qty === 0 ? "" : n.qty}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            updateLine(n.id, { qty: raw === "" ? 0 : Number(raw) });
+                          }}
+                          placeholder="0"
                         />
                       </td>
 
                       {/* Единица (селект из справочника) */}
                       <td className="px-2 py-[6px]">
                         <select
-                          className="form-control"
+                          className="form-control mrp-select"
                           value={n.uom || ""}
                           onChange={(e) => updateLine(n.id, { uom: e.target.value })}
                         >
@@ -370,7 +397,7 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
 
                       {/* delete */}
                       <td className="px-2 py-[6px] text-right">
-                        <button className="act" title="Удалить" onClick={() => removeLine(n.id)}>✖</button>
+                        <button className="act act--ghost" title="Удалить" onClick={() => removeLine(n.id)}>✖</button>
                       </td>
                     </tr>
                   );

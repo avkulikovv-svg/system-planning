@@ -23,7 +23,7 @@ type DictItem = {
   code: string;
   name: string;
   uom?: string;
-  category?: string;
+  group?: string;
   vendorId?: string;
 };
 
@@ -60,19 +60,39 @@ export async function fetchSpecsFromSupabase(): Promise<SpecRecord[]> {
 
   const { data: linesData, error: linesErr } = await supabase
     .from("spec_lines")
-    .select("id, spec_id, kind, ref_item_id, qty");
+    .select("id, spec_id, kind, ref_item_id, qty, uom");
   if (linesErr) throw linesErr;
+
+  const refIds = Array.from(
+    new Set((linesData || []).map((ln: any) => ln?.ref_item_id).filter(Boolean))
+  ) as string[];
+  const uomByItemId = new Map<string, string>();
+  if (refIds.length) {
+    const chunkSize = 500;
+    for (let i = 0; i < refIds.length; i += chunkSize) {
+      const chunk = refIds.slice(i, i + chunkSize);
+      const { data: itemsData, error: itemsErr } = await supabase
+        .from("items")
+        .select("id, uom")
+        .in("id", chunk);
+      if (itemsErr) throw itemsErr;
+      (itemsData || []).forEach((row: any) => {
+        if (row?.id) uomByItemId.set(row.id as string, row.uom || "");
+      });
+    }
+  }
 
   const linesBySpec = new Map<string, SpecLineRecord[]>();
   (linesData || []).forEach((ln: any) => {
     if (!ln?.spec_id) return;
+    const fallbackUom = uomByItemId.get(ln.ref_item_id as string) || "";
     const line: SpecLineRecord = {
       id: ln.id as string,
       specId: ln.spec_id as string,
       refId: ln.ref_item_id as string,
       kind: (ln.kind as "mat" | "semi") ?? "mat",
       qty: Number(ln.qty) || 0,
-      uom: "",
+      uom: (ln.uom as string) || fallbackUom,
     };
     if (!linesBySpec.has(line.specId)) linesBySpec.set(line.specId, []);
     linesBySpec.get(line.specId)!.push(line);
@@ -137,14 +157,15 @@ export async function upsertSpecSupabase(spec: SpecInput, ctx: SpecContext): Pro
     const source = findSource(ctx, kind, refRaw);
     const code = source?.code || refRaw;
     const name = source?.name || code;
+    const lineUom = line.uom || source?.uom || "шт";
     const vendorName = source?.vendorId ? vendorNameById.get(source.vendorId) ?? null : null;
     const itemUuid = await resolveItemUuid({
       kind: kind === "semi" ? "semi" : "material",
       code,
       name,
       legacyId: source?.id || refRaw,
-      uom: source?.uom || line.uom,
-      category: source?.category || null,
+      uom: lineUom,
+      groupName: source?.group || null,
       vendorName,
     });
     if (!itemUuid) continue;
@@ -154,6 +175,7 @@ export async function upsertSpecSupabase(spec: SpecInput, ctx: SpecContext): Pro
       kind,
       ref_item_id: itemUuid,
       qty: line.qty,
+      uom: lineUom,
     });
   }
 

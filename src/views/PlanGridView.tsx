@@ -12,6 +12,18 @@ type Product = {
   category?: string;
   uom?: string;
   price?: number;
+  wbSku?: string;
+  ozonSku?: string;
+  barcode?: string;
+  mpCategoryWb?: string;
+  mpCategoryOzon?: string;
+  boxLength?: number;
+  boxWidth?: number;
+  boxHeight?: number;
+  boxWeight?: number;
+  unitsPerBox?: number;
+  unitsPerPallet?: number;
+  palletWeight?: number;
 };
 
 type Semi = {
@@ -283,7 +295,7 @@ function PlanGridView() {
       }
       const { data: linesData, error: linesErr } = await supabase
         .from("spec_lines")
-        .select("id, spec_id, kind, ref_item_id, qty");
+        .select("id, spec_id, kind, ref_item_id, qty, uom");
       if (linesErr) {
         console.error("load spec lines", linesErr);
         return;
@@ -295,7 +307,7 @@ function PlanGridView() {
           kind: (ln.kind as "mat" | "semi") ?? "mat",
           refId: ln.ref_item_id,
           qty: Number(ln.qty) || 0,
-          uom: "",
+          uom: ln.uom || "",
         };
         if (!linesBySpec.has(ln.spec_id)) linesBySpec.set(ln.spec_id, []);
         linesBySpec.get(ln.spec_id)!.push(entry);
@@ -531,6 +543,27 @@ function PlanGridView() {
     if (catFilter && !availableCats.includes(catFilter)) setCatFilter("");
   }, [availableCats, catFilter, setCatFilter]);
 
+  const [sortState, setSortState] = useLocalState<{
+    key: "code" | "name";
+    dir: "asc" | "desc";
+  }>("mrp.plan.sort", { key: "code", dir: "asc" });
+
+  const handleSort = (key: "code" | "name") => {
+    setSortState((prev) => {
+      if (prev.key !== key) return { key, dir: "asc" };
+      return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
+    });
+  };
+
+  const sortArrows = (key: "code" | "name") => {
+    const isActive = sortState.key === key;
+    return (
+      <span className={`wbwh-sort ${isActive ? "is-active" : ""}`} aria-hidden="true">
+        <span className={`wbwh-sort__arrow ${isActive && sortState.dir === "asc" ? "is-selected" : ""}`}>▲</span>
+        <span className={`wbwh-sort__arrow ${isActive && sortState.dir === "desc" ? "is-selected" : ""}`}>▼</span>
+      </span>
+    );
+  };
   // строки
   const rows = React.useMemo(() => {
     if (scope === "fg") {
@@ -543,6 +576,17 @@ function PlanGridView() {
       return base;
     }
   }, [scope, products, semis, catFilter]);
+
+  const sortedRows = React.useMemo(() => {
+    const dir = sortState.dir === "asc" ? 1 : -1;
+    const getValue = (r: Product | Semi) => {
+      if (sortState.key === "name") return r.name ?? "";
+      return r.code ?? "";
+    };
+    return [...rows].sort((a, b) =>
+      getValue(a).localeCompare(getValue(b), "ru", { sensitivity: "base" }) * dir
+    );
+  }, [rows, sortState]);
 
   // итоги
   const totals = React.useMemo(() => {
@@ -806,56 +850,57 @@ function PlanGridView() {
     <div className="mrp-page">
       <div className="mrp-card">
         {/* toolbar */}
-        <div className="ui-form form-grid-2 toolbar mb-2">
-          {/* левая колонка */}
-          <div>
-            <div className="form-row">
-              <span className="form-label">Период с</span>
+        <div className="mrp-toolbar mb-2">
+          <div className="mrp-toolbar__left">
+            <div className="mrp-field">
+              <span className="mrp-field__label">Период с</span>
               <div className="row-inline">
-                <input type="date" className="form-control" value={startISO} onChange={(e) => setStartISO(e.target.value)} />
+                <input
+                  type="date"
+                  className="mrp-input"
+                  value={startISO}
+                  onChange={(e) => setStartISO(e.target.value)}
+                />
                 <input
                   type="number"
-                  className="form-control num-compact"
+                  className="mrp-input num-compact"
                   value={days}
                   onChange={(e) => setDays(Math.min(90, Math.max(1, Number(e.target.value) || 1)))}
                 />
               </div>
             </div>
 
-            <div className="form-row">
-              <span className="form-label">Сдвиг диапазона</span>
+            <div className="mrp-field">
+              <span className="mrp-field__label">Сдвиг диапазона</span>
               <div className="row-inline">
-                <button type="button" className="app-pill app-pill--sm" onClick={() => addLeft(1)}>+1 слева</button>
-                <button type="button" className="app-pill app-pill--sm" onClick={() => addRight(1)}>+1 справа</button>
-                <button type="button" className="app-pill app-pill--sm" onClick={() => addLeft(7)}>+7 слева</button>
-                <button type="button" className="app-pill app-pill--sm" onClick={() => addRight(7)}>+7 справа</button>
-                <button type="button" className="app-pill app-pill--sm" onClick={() => removeRight(1)}>-1 справа</button>
+                <button type="button" className="mrp-btn mrp-btn--ghost" onClick={() => addLeft(1)}>+1 слева</button>
+                <button type="button" className="mrp-btn mrp-btn--ghost" onClick={() => addRight(1)}>+1 справа</button>
+                <button type="button" className="mrp-btn mrp-btn--ghost" onClick={() => addLeft(7)}>+7 слева</button>
+                <button type="button" className="mrp-btn mrp-btn--ghost" onClick={() => addRight(7)}>+7 справа</button>
+                <button type="button" className="mrp-btn mrp-btn--ghost" onClick={() => removeRight(1)}>-1 справа</button>
               </div>
             </div>
 
-            <div className="form-row">
-              <label className="row-inline">
-                <input type="checkbox" checked={rtl} onChange={(e) => setRtl(e.target.checked)} />
-                Справа → налево
-              </label>
-            </div>
+            <label className="row-inline text-sm">
+              <input type="checkbox" checked={rtl} onChange={(e) => setRtl(e.target.checked)} />
+              Справа → налево
+            </label>
           </div>
 
-          {/* правая колонка */}
-          <div>
-            <div className="form-row">
-              <span className="form-label">Режим</span>
+          <div className="mrp-toolbar__right">
+            <div className="mrp-field">
+              <span className="mrp-field__label">Режим</span>
               <div className="row-inline">
                 <button
                   type="button"
-                  className={`app-pill app-pill--sm ${scope === "fg" ? "is-active" : ""}`}
+                  className={`mrp-btn ${scope === "fg" ? "mrp-btn--primary" : "mrp-btn--ghost"}`}
                   onClick={() => setScope("fg")}
                 >
                   Готовая продукция
                 </button>
                 <button
                   type="button"
-                  className={`app-pill app-pill--sm ${scope === "semi" ? "is-active" : ""}`}
+                  className={`mrp-btn ${scope === "semi" ? "mrp-btn--primary" : "mrp-btn--ghost"}`}
                   onClick={() => setScope("semi")}
                 >
                   Полуфабрикаты
@@ -863,43 +908,50 @@ function PlanGridView() {
               </div>
             </div>
 
-            <div className="form-row">
-              <div className="row-inline" style={{ gap: 12 }}>
-                <div>
-                  <span className="form-label">Склад</span>
-                  <select className="form-control" value={physId} onChange={(e) => setPhysId(e.target.value)}>
-                    {physical.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
-                </div>
+            <div className="mrp-field">
+              <span className="mrp-field__label">Склад</span>
+              <select className="mrp-select" value={physId} onChange={(e) => setPhysId(e.target.value)}>
+                {physical.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
 
-                <div>
-                  <span className="form-label">Категория</span>
-                  <select className="form-control" value={catFilter} onChange={(e) => setCatFilter(e.target.value)}>
-                    <option value="">(все категории)</option>
-                    {availableCats.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+            <div className="mrp-field">
+              <span className="mrp-field__label">Категория</span>
+              <select className="mrp-select" value={catFilter} onChange={(e) => setCatFilter(e.target.value)}>
+                <option value="">(все категории)</option>
+                {availableCats.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
             </div>
           </div>
         </div>
 
         {/* таблица */}
         <div className="mrp-hscroll">
-          <table className="min-w-full text-sm table-compact plangrid">
+          <table className="mrp-table text-sm table-compact plangrid">
             <thead>
               <tr>
-                <th className="sticky bg-white z-10 prod-col text-left px-2 py-2" style={{ left: 0 }}>
-                  {scope === "fg" ? "Продукт" : "Полуфабрикат"}
+                <th
+                  className="sticky bg-white z-10 code-col text-left px-2 py-2 wbwh-sortable"
+                  style={{ left: 0 }}
+                  onClick={() => handleSort("code")}
+                >
+                  Код{sortArrows("code")}
                 </th>
-                <th className="sticky bg-white z-10 fg-col text-left px-2 py-2" style={{ left: "var(--prod-w)" }}>
+                <th
+                  className="sticky bg-white z-10 name-col text-left px-2 py-2 wbwh-sortable"
+                  style={{ left: "var(--code-w)" }}
+                  onClick={() => handleSort("name")}
+                >
+                  {scope === "fg" ? "Продукт" : "Полуфабрикат"}{sortArrows("name")}
+                </th>
+                <th className="sticky bg-white z-10 fg-col text-left px-2 py-2" style={{ left: "calc(var(--code-w) + var(--name-w))" }}>
                   {scope === "fg" ? "Остаток ГП" : "Остаток ПФ"}
                 </th>
-                <th className="sticky bg-white z-10 metric-col text-left px-2 py-2" style={{ left: "calc(var(--prod-w) + var(--fg-w))" }}>
+                <th className="sticky bg-white z-10 metric-col text-left px-2 py-2" style={{ left: "calc(var(--code-w) + var(--name-w) + var(--fg-w))" }}>
                   Показатель
                 </th>
 
@@ -918,21 +970,22 @@ function PlanGridView() {
             </thead>
 
             <tbody>
-              {rows.map((item) => {
+              {sortedRows.map((item) => {
                 const id = item.id!;
                 const code = (item as any).code;
 
                 const PlanRow = (
                   <tr key={`${id}-plan`} className="border-t border-slate-200">
-                    <td className="sticky prod-col align-top px-2 py-[6px]" rowSpan={3} style={{ left: 0, background: "#fff" }}>
-                      <div className="font-medium truncate">
-                        {code} — {item.name}
-                      </div>
+                    <td className="sticky code-col align-top px-2 py-[6px]" rowSpan={3} style={{ left: 0, background: "#fff" }}>
+                      <span className="mrp-code">{code || "—"}</span>
                     </td>
-                    <td className="sticky fg-col align-top px-2 py-[6px]" rowSpan={3} style={{ left: "var(--prod-w)", background: "#fff" }}>
+                    <td className="sticky name-col align-top px-2 py-[6px]" rowSpan={3} style={{ left: "var(--code-w)", background: "#fff" }}>
+                      <span className="text-slate-700 text-sm leading-snug line-clamp-2">{item.name}</span>
+                    </td>
+                    <td className="sticky fg-col align-top px-2 py-[6px]" rowSpan={3} style={{ left: "calc(var(--code-w) + var(--name-w))", background: "#fff" }}>
                       {stockOfRow(id)}
                     </td>
-                    <td className="sticky metric-col px-2 py-[6px]" style={{ left: "calc(var(--prod-w) + var(--fg-w))", background: "#fff" }}>
+                    <td className="sticky metric-col px-2 py-[6px]" style={{ left: "calc(var(--code-w) + var(--name-w) + var(--fg-w))", background: "#fff" }}>
                       План
                     </td>
                     {range.map((d) => {
@@ -960,7 +1013,7 @@ function PlanGridView() {
 
                 const FactRow = (
                   <tr key={`${id}-fact`} className="border-t border-slate-100">
-                    <td className="sticky metric-col px-2 py-[6px]" style={{ left: "calc(var(--prod-w) + var(--fg-w))", background: "#fff" }}>
+                    <td className="sticky metric-col px-2 py-[6px]" style={{ left: "calc(var(--code-w) + var(--name-w) + var(--fg-w))", background: "#fff" }}>
                       Произведено
                     </td>
                     {range.map((d) => {
@@ -984,7 +1037,7 @@ function PlanGridView() {
 
                 const CoverRow = (
                   <tr key={`${id}-cover`} className="border-t border-slate-100">
-                    <td className="sticky metric-col px-2 py-[6px]" style={{ left: "calc(var(--prod-w) + var(--fg-w))", background: "#fff" }}>
+                    <td className="sticky metric-col px-2 py-[6px]" style={{ left: "calc(var(--code-w) + var(--name-w) + var(--fg-w))", background: "#fff" }}>
                       Мат. обеспеч.
                     </td>
                     {range.map((d) => {
@@ -1018,9 +1071,9 @@ function PlanGridView() {
                 );
               })}
 
-              {rows.length === 0 && (
+              {sortedRows.length === 0 && (
                 <tr>
-                  <td colSpan={3 + range.length} className="px-3 py-6 text-center text-slate-400">
+                  <td colSpan={4 + range.length} className="px-3 py-6 text-center text-slate-400">
                     Нет строк для выбранного режима/категории
                   </td>
                 </tr>
@@ -1029,11 +1082,12 @@ function PlanGridView() {
 
             <tfoot>
               <tr className="border-t border-slate-200">
-                <td className="prod-col font-medium px-2 py-2" style={{ left: 0, background: "#fff" }}>
+                <td className="code-col font-medium px-2 py-2" style={{ left: 0, background: "#fff" }}>
                   Итого по дню
                 </td>
-                <td className="fg-col px-2 py-2" style={{ left: "var(--prod-w)", background: "#fff" }}></td>
-                <td className="metric-col px-2 py-2" style={{ left: "calc(var(--prod-w) + var(--fg-w))", background: "#fff" }}></td>
+                <td className="name-col px-2 py-2" style={{ left: "var(--code-w)", background: "#fff" }}></td>
+                <td className="fg-col px-2 py-2" style={{ left: "calc(var(--code-w) + var(--name-w))", background: "#fff" }}></td>
+                <td className="metric-col px-2 py-2" style={{ left: "calc(var(--code-w) + var(--name-w) + var(--fg-w))", background: "#fff" }}></td>
                 {range.map((d) => (
                   <td key={d} className="date-col px-2 py-2">
                     <div className="text-sm font-semibold">{totals[d].plan}</div>

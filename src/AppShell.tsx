@@ -1,7 +1,11 @@
 // file: src/AppShell.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
 import PlanGridView from "./views/PlanGridView";
 import MaterialsView from "./views/MaterialsView";
+import { MarketplacesView } from "./views/MarketplacesView";
+import { WbWarehousesView } from "./views/WbWarehousesView";
+import SettingsMarketplaceWarehouses from "./views/SettingsMarketplaceWarehouses";
 import { supabase } from "./api/supabaseClient";
 import SpecModal from "./components/specs/SpecModal";
 import { fetchSpecsFromSupabase } from "./utils/specSupabase";
@@ -15,6 +19,7 @@ import {
 } from "./utils/receiptsSupabase";
 import {
   useSupabaseCategories,
+  useSupabaseGroups,
   useSupabaseUoms,
   useSupabaseVendors,
   useSupabaseWarehouses,
@@ -42,6 +47,13 @@ import {
 export type Sub = { key: string; title: string; route: string; icon?: string };
 export type Section = { key: string; title: string; icon: string; subs: Sub[] };
 
+type Profile = {
+  id: string;
+  email: string | null;
+  phone: string | null;
+  is_active: boolean;
+};
+
 type Product = {
   id?: string;
   status: string;
@@ -50,6 +62,18 @@ type Product = {
   category?: string;
   uom?: string;
   price?: number;
+  wbSku?: string;
+  ozonSku?: string;
+  barcode?: string;
+  mpCategoryWb?: string;
+  mpCategoryOzon?: string;
+  boxLength?: number;
+  boxWidth?: number;
+  boxHeight?: number;
+  boxWeight?: number;
+  unitsPerBox?: number;
+  unitsPerPallet?: number;
+  palletWeight?: number;
 };
 
 /* === Vendors & Materials === */
@@ -64,7 +88,7 @@ type Material = {
   leadTimeDays: number;
   price?: number;
   currency?: string;
-  category: string;
+  group: string;
 };
 
 /* === Spec model === (поддерживаем совместимость с item) */
@@ -184,6 +208,7 @@ const DEFAULT_NAV: Section[] = [
       { key: "forecast", title: "Прогноз", route: "/app/sales/forecast" },
       { key: "prices", title: "Цены/Прайсы", route: "/app/sales/prices" },
       { key: "mp", title: "Маркетплейсы", route: "/app/sales/mp" },
+      { key: "wbwh", title: "Склады WB", route: "/app/sales/wb-warehouses" },
     ],
   },
   {
@@ -219,7 +244,9 @@ const DEFAULT_NAV: Section[] = [
       { key: "uom", title: "Единицы", route: "/app/settings/uom" },
       { key: "curr", title: "Валюты", route: "/app/settings/curr" },
       { key: "cats", title: "Категории", route: "/app/settings/cats" },
+      { key: "groups", title: "Группы", route: "/app/settings/groups" },
       { key: "wh", title: "Склады", route: "/app/settings/wh" },
+      { key: "mpwh", title: "МП склады", route: "/app/settings/mpwh" },
       { key: "users", title: "Пользователи/Роли", route: "/app/settings/users" },
       { key: "integr", title: "Интеграции", route: "/app/settings/integr" },
       { key: "nums", title: "Нумераторы", route: "/app/settings/nums" },
@@ -331,16 +358,15 @@ function MaterialForm({
     vendors: Vendor[];
     addVendor: (name: string) => Promise<Vendor | null>;
     uoms: string[];
-    categories: string[];
-    addCategory: (name: string) => Promise<void>;
+    groups: string[];
+    addGroup: (name: string) => Promise<void>;
   };
   ensureUniqueCode: (code: string, selfId?: string) => boolean;
 }) {
   // ---------- state ----------
   const [form, setForm] = React.useState<Material>(() => {
     if (initial) {
-      // гарантия: category всегда строка
-      return { ...initial, category: (initial as any).category ?? "" };
+      return { ...initial, group: (initial as any).group ?? "" };
     }
     const code = genCode("MAT");
     return {
@@ -353,7 +379,7 @@ function MaterialForm({
       leadTimeDays: 0,
       price: undefined,
       currency: "RUB",
-      category: "",
+      group: "",
     };
   });
 
@@ -378,7 +404,7 @@ function MaterialForm({
   };
 
   // ---------- validation ----------
-  type Errs = Partial<Record<"code"|"name"|"vendorId"|"uom"|"category", string>>;
+  type Errs = Partial<Record<"code"|"name"|"vendorId"|"uom"|"group", string>>;
   const [showErrors, setShowErrors] = useState(false);
 
   const computeErrors = (draft: Material): Errs => {
@@ -387,7 +413,7 @@ function MaterialForm({
     if (!draft.name?.trim()) e.name = "Обязательное поле";
     if (!draft.vendorId?.trim()) e.vendorId = "Выберите поставщика";
     if (!draft.uom?.trim()) e.uom = "Выберите единицу";
-    if (!draft.category?.trim()) e.category = "Выберите категорию";
+    if (!draft.group?.trim()) e.group = "Выберите группу";
     if (draft.code?.trim()) {
       const ok = ensureUniqueCode(draft.code.trim(), draft.id);
       if (!ok) e.code = "Код уже используется";
@@ -409,11 +435,11 @@ function MaterialForm({
     }
   };
 
-  const addCategory = async () => {
-    const nm = (window.prompt("Новая категория") ?? "").trim();
+  const addGroup = async () => {
+    const nm = (window.prompt("Новая группа") ?? "").trim();
     if (!nm) return;
-    await dicts.addCategory(nm);
-    set("category", nm);
+    await dicts.addGroup(nm);
+    set("group", nm);
     setTimeout(() => catRef.current?.focus(), 0);
   };
 
@@ -427,7 +453,7 @@ function MaterialForm({
       if (eMap.name)      { nameRef.current?.focus(); return; }
       if (eMap.vendorId)  { vendorRef.current?.focus(); return; }
       if (eMap.uom)       { uomRef.current?.focus(); return; }
-      if (eMap.category)  { catRef.current?.focus(); return; }
+      if (eMap.group)     { catRef.current?.focus(); return; }
       return;
     }
 
@@ -441,7 +467,7 @@ function MaterialForm({
         ? undefined
         : Number(form.price),
       currency: form.currency?.trim() || "RUB",
-      category: form.category?.trim() || "",
+      group: form.group?.trim() || "",
     };
 
     onSave(cleaned);
@@ -480,7 +506,7 @@ function MaterialForm({
           <Label required>Ед. изм.</Label>
           <select
             ref={uomRef}
-            className="w-full px-3 py-2 rounded-xl border text-sm"
+            className="w-full mrp-select"
             data-invalid={!!err("uom")}
             value={form.uom}
             onChange={(e) => set("uom", e.target.value)}
@@ -515,7 +541,7 @@ function MaterialForm({
           <div className="flex items-center gap-2">
             <select
               ref={vendorRef}
-              className="w-full px-3 py-2 rounded-xl border text-sm"
+              className="w-full mrp-select"
               data-invalid={!!err("vendorId")}
               value={form.vendorId}
               onChange={(e) => set("vendorId", e.target.value)}
@@ -527,7 +553,7 @@ function MaterialForm({
             </select>
             <button
               type="button"
-              className="icon-btn"
+              className="mrp-icon-btn"
               title="Добавить поставщика"
               onClick={addVendor}
             >
@@ -539,33 +565,33 @@ function MaterialForm({
           )}
         </div>
 
-        {/* Категория */}
+        {/* Группа */}
         <div>
-          <Label required>Категория</Label>
+          <Label required>Группа</Label>
           <div className="flex items-center gap-2">
             <select
               ref={catRef}
-              className="w-full px-3 py-2 rounded-xl border text-sm"
-              data-invalid={!!err("category")}
-              value={form.category ?? ""}
-              onChange={(e) => set("category", e.target.value)}
+              className="w-full mrp-select"
+              data-invalid={!!err("group")}
+              value={form.group ?? ""}
+              onChange={(e) => set("group", e.target.value)}
             >
               <option value=""></option>
-              {dicts.categories.map((c) => (
-                <option key={c} value={c}>{c}</option>
+              {dicts.groups.map((g) => (
+                <option key={g} value={g}>{g}</option>
               ))}
             </select>
             <button
               type="button"
-              className="icon-btn"
-              title="Добавить категорию"
-              onClick={addCategory}
+              className="mrp-icon-btn"
+              title="Добавить группу"
+              onClick={addGroup}
             >
               <Plus className="w-4 h-4" />
             </button>
           </div>
-          {showErrors && err("category") && (
-            <div className="text-[11px] text-rose-500 mt-1">{err("category")}</div>
+          {showErrors && err("group") && (
+            <div className="text-[11px] text-rose-500 mt-1">{err("group")}</div>
           )}
         </div>
 
@@ -577,8 +603,13 @@ function MaterialForm({
             min={1}
             step={1}
             className="w-full px-3 py-2 rounded-xl border text-sm"
-            value={form.moq}
-            onChange={(e) => set("moq", Math.max(1, normNum(e.target.value, 1)))}
+            value={form.moq ?? ""}
+            onChange={(e) => {
+              const raw = e.target.value;
+              if (raw === "") { set("moq", undefined as any); return; }
+              set("moq", Math.max(1, normNum(raw, 1)));
+            }}
+            placeholder="1"
           />
         </div>
 
@@ -590,8 +621,13 @@ function MaterialForm({
             min={0}
             step={1}
             className="w-full px-3 py-2 rounded-xl border text-sm"
-            value={form.leadTimeDays}
-            onChange={(e) => set("leadTimeDays", Math.max(0, normNum(e.target.value, 0)))}
+            value={form.leadTimeDays ?? ""}
+            onChange={(e) => {
+              const raw = e.target.value;
+              if (raw === "") { set("leadTimeDays", undefined as any); return; }
+              set("leadTimeDays", Math.max(0, normNum(raw, 0)));
+            }}
+            placeholder="0"
           />
         </div>
 
@@ -620,7 +656,7 @@ function MaterialForm({
         <div>
           <Label>Валюта</Label>
           <select
-            className="w-full px-3 py-2 rounded-xl border text-sm"
+            className="w-full mrp-select"
             value={form.currency || "RUB"}
             onChange={(e) => set("currency", e.target.value)}
           >
@@ -688,6 +724,13 @@ function ProductForm({
     }
   );
 
+  const parseNumber = (value: string): number | undefined => {
+    const v = value.replace(",", ".").trim();
+    if (!v) return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+
   const save = (e: React.FormEvent) => {
     e.preventDefault();
     const code = m.code.trim();
@@ -707,7 +750,7 @@ function ProductForm({
       <div>
         <label>Статус</label>
         <select
-          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+          className="w-full mrp-select"
           value={m.status}
           onChange={(e) => setM({ ...m, status: e.target.value as any })}
         >
@@ -753,7 +796,7 @@ function ProductForm({
         <label>Категория</label>
         <div className="flex gap-2">
           <select
-            className="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-sm"
+            className="flex-1 mrp-select"
             value={m.category}
             onChange={(e) => setM({ ...m, category: e.target.value })}
           >
@@ -781,7 +824,7 @@ function ProductForm({
         <label>Ед. изм.</label>
         <div className="flex gap-2">
           <select
-            className="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-sm"
+            className="flex-1 mrp-select"
             value={m.uom}
             onChange={(e) => setM({ ...m, uom: e.target.value })}
           >
@@ -810,9 +853,162 @@ function ProductForm({
           type="number"
           step="0.01"
           className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-          value={m.price ?? 0}
+          value={m.price ?? ""}
+          onChange={(e) => {
+            const raw = e.target.value;
+            setM({ ...m, price: raw === "" ? undefined : Number(raw) });
+          }}
+          placeholder="0.00"
+        />
+      </div>
+
+      <div className="col-span-2 mt-4">
+        <div className="text-sm font-semibold text-slate-600">Маркетплейсы</div>
+      </div>
+
+      <div>
+        <label>SKU WB</label>
+        <input
+          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+          value={m.wbSku ?? ""}
+          onChange={(e) => setM({ ...m, wbSku: e.target.value || undefined })}
+          placeholder="Например, WB123456"
+        />
+      </div>
+
+      <div>
+        <label>SKU Ozon</label>
+        <input
+          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+          value={m.ozonSku ?? ""}
+          onChange={(e) => setM({ ...m, ozonSku: e.target.value || undefined })}
+        />
+      </div>
+
+      <div>
+        <label>Штрихкод / EAN</label>
+        <input
+          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+          value={m.barcode ?? ""}
+          onChange={(e) => setM({ ...m, barcode: e.target.value || undefined })}
+          placeholder="460…"
+        />
+      </div>
+
+      <div>
+        <label>Категория WB</label>
+        <input
+          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+          value={m.mpCategoryWb ?? ""}
           onChange={(e) =>
-            setM({ ...m, price: Number(e.target.value) || 0 })
+            setM({ ...m, mpCategoryWb: e.target.value || undefined })
+          }
+          placeholder="Из классификатора WB"
+        />
+      </div>
+
+      <div>
+        <label>Категория Ozon</label>
+        <input
+          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+          value={m.mpCategoryOzon ?? ""}
+          onChange={(e) =>
+            setM({ ...m, mpCategoryOzon: e.target.value || undefined })
+          }
+        />
+      </div>
+
+      <div className="col-span-2 mt-4">
+        <div className="text-sm font-semibold text-slate-600">Упаковка</div>
+      </div>
+
+      <div>
+        <label>Длина коробки, см</label>
+        <input
+          type="number"
+          step="0.1"
+          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+          value={m.boxLength ?? ""}
+          onChange={(e) =>
+            setM({ ...m, boxLength: parseNumber(e.target.value) })
+          }
+        />
+      </div>
+
+      <div>
+        <label>Ширина коробки, см</label>
+        <input
+          type="number"
+          step="0.1"
+          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+          value={m.boxWidth ?? ""}
+          onChange={(e) =>
+            setM({ ...m, boxWidth: parseNumber(e.target.value) })
+          }
+        />
+      </div>
+
+      <div>
+        <label>Высота коробки, см</label>
+        <input
+          type="number"
+          step="0.1"
+          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+          value={m.boxHeight ?? ""}
+          onChange={(e) =>
+            setM({ ...m, boxHeight: parseNumber(e.target.value) })
+          }
+        />
+      </div>
+
+      <div>
+        <label>Вес коробки, кг</label>
+        <input
+          type="number"
+          step="0.01"
+          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+          value={m.boxWeight ?? ""}
+          onChange={(e) =>
+            setM({ ...m, boxWeight: parseNumber(e.target.value) })
+          }
+        />
+      </div>
+
+      <div>
+        <label>Штук в коробке</label>
+        <input
+          type="number"
+          step="1"
+          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+          value={m.unitsPerBox ?? ""}
+          onChange={(e) =>
+            setM({ ...m, unitsPerBox: parseNumber(e.target.value) })
+          }
+        />
+      </div>
+
+      <div>
+        <label>Штук на паллете</label>
+        <input
+          type="number"
+          step="1"
+          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+          value={m.unitsPerPallet ?? ""}
+          onChange={(e) =>
+            setM({ ...m, unitsPerPallet: parseNumber(e.target.value) })
+          }
+        />
+      </div>
+
+      <div>
+        <label>Вес паллеты, кг</label>
+        <input
+          type="number"
+          step="0.1"
+          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+          value={m.palletWeight ?? ""}
+          onChange={(e) =>
+            setM({ ...m, palletWeight: parseNumber(e.target.value) })
           }
         />
       </div>
@@ -839,12 +1035,18 @@ function ProductsView() {
   const [stockColumns, setStockColumns] = useLocalState<string[]>("mrp.products.stockCols", []);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
+  const [sortState, setSortState] = useState<{
+    key: "code" | "name" | "category";
+    dir: "asc" | "desc";
+  }>({ key: "name", dir: "asc" });
 
   const { uoms: uomRecords, addUom: addUomRecord } = useSupabaseUoms();
   const { categories: categoryRecords, addCategory: addCategoryRecord } = useSupabaseCategories();
+  const { groups: groupRecords, addGroup: addGroupRecord } = useSupabaseGroups();
   const { vendors, addVendor: addVendorRecord } = useSupabaseVendors();
   const uoms = React.useMemo(() => uomRecords.map((u) => u.name), [uomRecords]);
   const categories = React.useMemo(() => categoryRecords.map((c) => c.name), [categoryRecords]);
+  const groups = React.useMemo(() => groupRecords.map((g) => g.name), [groupRecords]);
   const [materials, setMaterials] = useLocalState<Material[]>("mrp.materials.v1", []);
 
   const statuses = ["draft", "active", "archived"];
@@ -854,6 +1056,9 @@ function ProductsView() {
   const addCategory = React.useCallback(async (name: string) => {
     await addCategoryRecord(name);
   }, [addCategoryRecord]);
+  const addGroup = React.useCallback(async (name: string) => {
+    await addGroupRecord(name);
+  }, [addGroupRecord]);
   const addVendor = React.useCallback(
     (name: string) => addVendorRecord(name),
     [addVendorRecord]
@@ -910,7 +1115,7 @@ function ProductsView() {
         leadTimeDays: 0,
         price: undefined,
         currency: "RUB",
-        category: "",
+        group: "",
       });
       setMatModalOpen(true);
     });
@@ -990,7 +1195,9 @@ function ProductsView() {
     try {
       const { data, error } = await supabase
         .from("items")
-        .select("id, status, code, name, category, uom, price")
+        .select(
+          "id, status, code, name, category, uom, price, wb_sku, ozon_sku, barcode, mp_category_wb, mp_category_ozon, box_length, box_width, box_height, box_weight, units_per_box, units_per_pallet, pallet_weight"
+        )
         .eq("kind", "product")
         .order("name", { ascending: true });
       if (error) throw error;
@@ -1002,6 +1209,18 @@ function ProductsView() {
         category: row.category ?? "",
         uom: row.uom ?? "шт",
         price: row.price ?? undefined,
+        wbSku: row.wb_sku ?? undefined,
+        ozonSku: row.ozon_sku ?? undefined,
+        barcode: row.barcode ?? undefined,
+        mpCategoryWb: row.mp_category_wb ?? undefined,
+        mpCategoryOzon: row.mp_category_ozon ?? undefined,
+        boxLength: row.box_length ?? undefined,
+        boxWidth: row.box_width ?? undefined,
+        boxHeight: row.box_height ?? undefined,
+        boxWeight: row.box_weight ?? undefined,
+        unitsPerBox: row.units_per_box ?? undefined,
+        unitsPerPallet: row.units_per_pallet ?? undefined,
+        palletWeight: row.pallet_weight ?? undefined,
       }));
       setItems(mapped);
     } catch (err) {
@@ -1045,6 +1264,18 @@ function ProductsView() {
       category: p.category ?? "",
       uom: p.uom ?? "",
       price: p.price ?? null,
+      wb_sku: p.wbSku?.trim() || null,
+      ozon_sku: p.ozonSku?.trim() || null,
+      barcode: p.barcode?.trim() || null,
+      mp_category_wb: p.mpCategoryWb?.trim() || null,
+      mp_category_ozon: p.mpCategoryOzon?.trim() || null,
+      box_length: p.boxLength ?? null,
+      box_width: p.boxWidth ?? null,
+      box_height: p.boxHeight ?? null,
+      box_weight: p.boxWeight ?? null,
+      units_per_box: p.unitsPerBox ?? null,
+      units_per_pallet: p.unitsPerPallet ?? null,
+      pallet_weight: p.palletWeight ?? null,
     };
     const { error } = await supabase.from("items").upsert(payload, { onConflict: "id" });
     if (error) {
@@ -1098,6 +1329,35 @@ function ProductsView() {
         (p.category || "").toLowerCase().includes(q)
     );
   }, [items, query]);
+
+  const sortedItems = React.useMemo(() => {
+    const dir = sortState.dir === "asc" ? 1 : -1;
+    const getValue = (p: Product) => {
+      if (sortState.key === "code") return p.code || "";
+      if (sortState.key === "category") return p.category || "";
+      return p.name || "";
+    };
+    return [...filteredItems].sort((a, b) =>
+      getValue(a).localeCompare(getValue(b), "ru", { sensitivity: "base" }) * dir
+    );
+  }, [filteredItems, sortState]);
+
+  const handleSort = (key: "code" | "name" | "category") => {
+    setSortState((prev) => {
+      if (prev.key !== key) return { key, dir: "asc" };
+      return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
+    });
+  };
+
+  const sortArrows = (key: "code" | "name" | "category") => {
+    const isActive = sortState.key === key;
+    return (
+      <span className={`wbwh-sort ${isActive ? "is-active" : ""}`} aria-hidden="true">
+        <span className={`wbwh-sort__arrow ${isActive && sortState.dir === "asc" ? "is-selected" : ""}`}>▲</span>
+        <span className={`wbwh-sort__arrow ${isActive && sortState.dir === "desc" ? "is-selected" : ""}`}>▼</span>
+      </span>
+    );
+  };
 
   const physicalWarehouses = React.useMemo(
     () => warehouses.filter((w) => w.type === "physical" && w.isActive),
@@ -1154,98 +1414,132 @@ function ProductsView() {
 
   return (
     <>
-      <div className="app-plate app-plate--solid p-3">
-        <div className="flex items-center gap-2 mb-2 flex-wrap">
-          <input
-            className="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-sm"
-            placeholder="Поиск"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <button className="app-pill app-pill--md" onClick={refreshAll} disabled={loading}>
-            {loading ? "Обновляем…" : "Обновить"}
-          </button>
-          <button type="button" className="app-pill app-pill--md" onClick={addStockColumn}>
-            + Колонка склада
-          </button>
-          <button onClick={openCreate} className="app-pill app-pill--md is-active inline-flex items-center gap-2">
-            <Plus className="w-4 h-4" /> Создать
-          </button>
+      <div className="mrp-page">
+        <div className="mrp-page-head">
+          <div className="mrp-title-row">
+            <h1 className="mrp-title">Товары</h1>
+            <span className="mrp-count">{filteredItems.length}</span>
+          </div>
+          <div className="mrp-actions">
+            <button className="mrp-btn mrp-btn--ghost" onClick={refreshAll} disabled={loading}>
+              {loading ? "Обновляем…" : "Обновить"}
+            </button>
+            <button onClick={openCreate} className="mrp-btn mrp-btn--primary">
+              <Plus className="w-4 h-4" /> Добавить товар
+            </button>
+          </div>
         </div>
 
-        <div className="overflow-auto rounded-xl border border-slate-100 bg-white">
-          <table className="min-w-full text-sm table-compact">
-            <thead className="bg-slate-50 text-slate-500">
-              <tr>
-                <th className="text-left px-3 py-2">Статус</th>
-                <th className="text-left px-3 py-2">Код</th>
-                <th className="text-left px-3 py-2">Наименование</th>
-                <th className="text-left px-3 py-2">Категория</th>
-                <th className="text-left px-3 py-2">Ед.</th>
-                <th className="text-left px-3 py-2">Цена</th>
-                <th className="text-right px-3 py-2 w-[110px]">Остаток, всего</th>
-                {stockColumns.map((physId, idx) => (
-                  <th key={`${physId || "empty"}-${idx}`} className="text-left px-3 py-2 w-[180px] align-top">
-                    <div className="flex items-center gap-2">
-                      <select
-                        className="flex-1 px-2 py-1 rounded-lg border border-slate-200 text-[13px]"
-                        value={physId}
-                        onChange={(e) => updateStockColumn(idx, e.target.value)}
-                      >
-                        <option value="">(выберите склад)</option>
-                        {physicalWarehouses.map((phys) => (
-                          <option key={phys.id} value={phys.id}>
-                            {phys.name}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        className="icon-btn"
-                        title="Убрать колонку"
-                        onClick={() => removeStockColumn(idx)}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
+        <div className="mrp-card">
+          <div className="mrp-toolbar">
+            <div className="mrp-toolbar__left">
+              <div className="mrp-search-input">
+                <Search className="w-4 h-4" />
+                <input
+                  placeholder="Поиск по коду, наименованию, категории…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="mrp-toolbar__right">
+              <button type="button" className="mrp-btn mrp-btn--ghost" onClick={addStockColumn}>
+                + Колонка склада
+              </button>
+            </div>
+          </div>
+
+          <div className="mrp-hscroll">
+            <table className="mrp-table text-sm">
+              <thead>
+                <tr>
+                  <th className="text-left px-2 py-2">Статус</th>
+                  <th className="text-left px-2 py-2 wbwh-sortable" onClick={() => handleSort("code")}>
+                    Код{sortArrows("code")}
                   </th>
-                ))}
-                <th className="text-left px-3 py-2">Действия</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredItems.map((p) => {
+                  <th className="text-left px-2 py-2 wbwh-sortable" onClick={() => handleSort("name")}>
+                    Наименование{sortArrows("name")}
+                  </th>
+                  <th className="text-left px-2 py-2 wbwh-sortable" onClick={() => handleSort("category")}>
+                    Категория{sortArrows("category")}
+                  </th>
+                  <th className="text-left px-2 py-2">Ед.</th>
+                  <th className="text-left px-2 py-2">Цена</th>
+                  <th className="text-right px-2 py-2 w-[110px]">Остаток, всего</th>
+                  {stockColumns.map((physId, idx) => (
+                    <th key={`${physId || "empty"}-${idx}`} className="text-left px-2 py-2 w-[130px] align-top">
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "nowrap" }}>
+                        <select
+                          className="mrp-select mrp-select--sm min-w-0 flex-1 max-w-[90px]"
+                          value={physId}
+                          onChange={(e) => updateStockColumn(idx, e.target.value)}
+                        >
+                          <option value="">(выберите склад)</option>
+                          {physicalWarehouses.map((phys) => (
+                            <option key={phys.id} value={phys.id}>
+                              {phys.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className="mrp-icon-btn"
+                          title="Убрать колонку"
+                          onClick={() => removeStockColumn(idx)}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </th>
+                  ))}
+                  <th className="text-left px-2 py-2">Действия</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedItems.map((p) => {
                 const sp = findSpecForProduct(p);
                 const totalQty = p.id ? totalByProduct.get(p.id) ?? 0 : 0;
+                const statusValue = (p.status ?? "active").toString();
+                const statusKey = statusValue.toLowerCase();
+                const statusClass =
+                  statusKey === "draft"
+                    ? "mrp-status mrp-status--draft"
+                    : statusKey === "archived"
+                      ? "mrp-status mrp-status--archived"
+                      : "mrp-status";
                 return (
                   <tr key={p.id} className="border-t border-slate-100 hover:bg-slate-50">
-                    <td className="px-3 py-2">{p.status}</td>
-                    <td className="px-3 py-2">{p.code}</td>
-                    <td className="px-3 py-2">{p.name}</td>
-                    <td className="px-3 py-2">{p.category}</td>
-                    <td className="px-3 py-2">{p.uom}</td>
-                    <td className="px-3 py-2">{p.price?.toLocaleString("ru-RU")}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{formatQty(totalQty)}</td>
+                    <td className="px-2 py-2">
+                      <span className={statusClass}>{statusValue}</span>
+                    </td>
+                    <td className="px-2 py-2">
+                      <span className="mrp-code">{p.code}</span>
+                    </td>
+                    <td className="px-2 py-2">{p.name}</td>
+                    <td className="px-2 py-2">{p.category}</td>
+                    <td className="px-2 py-2">{p.uom}</td>
+                    <td className="px-2 py-2">{p.price?.toLocaleString("ru-RU")}</td>
+                    <td className="px-2 py-2 text-right tabular-nums">{formatQty(totalQty)}</td>
                     {stockColumns.map((physId, idx) => {
                       if (!physId) {
                         return (
-                          <td key={`${p.id}-empty-${idx}`} className="px-3 py-2 text-right tabular-nums text-slate-400">
+                          <td key={`${p.id}-empty-${idx}`} className="px-2 py-2 text-right tabular-nums text-slate-400">
                             —
                           </td>
                         );
                       }
                       const qty = p.id ? stockByPhysical.get(physId)?.get(p.id) ?? 0 : 0;
                       return (
-                        <td key={`${p.id}-${physId}-${idx}`} className="px-3 py-2 text-right tabular-nums">
+                        <td key={`${p.id}-${physId}-${idx}`} className="px-2 py-2 text-right tabular-nums">
                           {formatQty(qty)}
                         </td>
                       );
                     })}
-                    <td className="px-3 py-2">
+                    <td className="px-2 py-2">
                       <div className="flex items-center gap-3">
                         <button
                           type="button"
-                          className="act" data-action="edit"
+                          className="act act--ghost" data-action="edit"
                           title="Редактировать товар"
                           onClick={() => openEdit(p)}
                         >
@@ -1254,7 +1548,7 @@ function ProductsView() {
 
                         <button
                           type="button"
-                          className="act" data-action="spec"
+                          className="act act--ghost" data-action="spec"
                           title={sp ? `Редактировать спецификацию (${sp.lines.length} поз.)` : "Создать спецификацию"}
                           onClick={() => openSpec({ id: p.id, code: p.code, name: p.name })}
                         >
@@ -1263,7 +1557,7 @@ function ProductsView() {
 
                         <button
                           type="button"
-                          className="act" data-action="delete"
+                          className="act act--ghost" data-action="delete"
                           title="Удалить товар"
                           onClick={() => removeProduct(p.id)}
                         >
@@ -1274,8 +1568,9 @@ function ProductsView() {
                   </tr>
                 );
               })}
-            </tbody>
-          </table>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -1312,7 +1607,7 @@ function ProductsView() {
             initial={matEditing}
             onCancel={cancelMaterial}
             onSave={saveMaterial}
-            dicts={{ vendors, addVendor, uoms, categories, addCategory }}
+            dicts={{ vendors, addVendor, uoms, groups, addGroup }}
             ensureUniqueCode={ensureUniqueMaterialCode}
           />
         </Modal>
@@ -1330,6 +1625,11 @@ function VendorsView() {
     renameVendor: renameVendorSupabase,
     removeVendor: removeVendorSupabase,
   } = useSupabaseVendors();
+  const [query, setQuery] = useState("");
+  const [sortState, setSortState] = useState<{ key: "name"; dir: "asc" | "desc" }>({
+    key: "name",
+    dir: "asc",
+  });
 
   const add = async () => {
     const name = (window.prompt("Название поставщика:") ?? "").trim();
@@ -1350,55 +1650,108 @@ function VendorsView() {
     await removeVendorSupabase(id);
   };
 
+  const handleSort = () => {
+    setSortState((prev) => ({
+      key: "name",
+      dir: prev.dir === "asc" ? "desc" : "asc",
+    }));
+  };
+
+  const sortArrows = () => {
+    const isActive = sortState.key === "name";
+    return (
+      <span className={`wbwh-sort ${isActive ? "is-active" : ""}`} aria-hidden="true">
+        <span className={`wbwh-sort__arrow ${isActive && sortState.dir === "asc" ? "is-selected" : ""}`}>▲</span>
+        <span className={`wbwh-sort__arrow ${isActive && sortState.dir === "desc" ? "is-selected" : ""}`}>▼</span>
+      </span>
+    );
+  };
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const dir = sortState.dir === "asc" ? 1 : -1;
+    return [...vendors]
+      .filter((v) => !q || v.name.toLowerCase().includes(q))
+      .sort((a, b) => a.name.localeCompare(b.name, "ru", { sensitivity: "base" }) * dir);
+  }, [vendors, query, sortState]);
+
   return (
-    <div className="app-plate app-plate--solid p-3">
-      <div className="flex items-center gap-2 mb-2">
-        <div className="text-sm text-slate-600">Всего: {vendors.length}</div>
-        <button className="app-pill app-pill--md is-active" onClick={add}>
-          <Plus className="w-4 h-4" /> Добавить
-        </button>
+    <div className="mrp-page">
+      <div className="mrp-page-head">
+        <div className="mrp-title-row">
+          <h1 className="mrp-title">Поставщики</h1>
+          <span className="mrp-count">{filtered.length}</span>
+        </div>
+        <div className="mrp-actions">
+          <button className="mrp-btn mrp-btn--primary" onClick={add}>
+            <Plus className="w-4 h-4" /> Добавить
+          </button>
+        </div>
       </div>
-      <div className="overflow-auto rounded-xl border border-slate-100 bg-white">
-        <table className="min-w-full text-sm table-compact">
-          <thead className="bg-slate-50 text-slate-500">
-            <tr>
-              <th className="text-left px-3 py-2">Название</th>
-              <th className="text-left px-3 py-2">Действия</th>
-            </tr>
-          </thead>
-          <tbody>
-            {vendors.map(v => (
-              <tr key={v.id} className="border-t border-slate-100 hover:bg-slate-50">
-                <td className="px-3 py-2">{v.name}</td>
-                <td className="px-3 py-2 actions-cell">
-                <div className="actions-inline">
-                  <button
-                    type="button"
-                    className="act" data-action="edit"
-                    title="Переименовать"
-                    onClick={() => rename(v.id)}
-                  >
-                    <Pencil />
-                  </button>
 
-                  <button
-                    type="button"
-                    className="act" data-action="delete"
-                    title="Удалить"
-                    onClick={() => remove(v.id)}
-                  >
-                    <Trash2 />
-                  </button>
-                </div>
-              </td>
+      <div className="mrp-card">
+        <div className="mrp-toolbar">
+          <div className="mrp-toolbar__left">
+            <div className="mrp-search-input">
+              <Search className="w-4 h-4" />
+              <input
+                placeholder="Поиск по названию…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
+          </div>
+        </div>
 
+        <div className="mrp-hscroll">
+          <table className="mrp-table text-sm">
+            <thead>
+              <tr>
+                <th className="text-left px-2 py-2 wbwh-sortable" onClick={handleSort}>
+                  Название{sortArrows()}
+                </th>
+                <th className="text-left px-2 py-2">Действия</th>
               </tr>
-            ))}
-            {vendors.length === 0 && (
-              <tr><td colSpan={2} className="px-3 py-6 text-center text-slate-400">Нет поставщиков</td></tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {filtered.map((v) => (
+                <tr key={v.id} className="border-t border-slate-100 hover:bg-slate-50">
+                  <td className="px-2 py-2">{v.name}</td>
+                  <td className="px-2 py-2 actions-cell">
+                    <div className="actions-inline">
+                      <button
+                        type="button"
+                        className="act act--ghost"
+                        data-action="edit"
+                        title="Переименовать"
+                        onClick={() => rename(v.id)}
+                      >
+                        <Pencil />
+                      </button>
+
+                      <button
+                        type="button"
+                        className="act act--ghost"
+                        data-action="delete"
+                        title="Удалить"
+                        onClick={() => remove(v.id)}
+                      >
+                        <Trash2 />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={2} className="px-2 py-6 text-center text-slate-400">
+                    Нет поставщиков
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -1450,6 +1803,10 @@ function SpecsView() {
 
   // UI
   const [query, setQuery] = useState("");
+  const [sortState, setSortState] = useState<{
+    key: "code" | "name";
+    dir: "asc" | "desc";
+  }>({ key: "name", dir: "asc" });
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Spec | null>(null);
 
@@ -1473,83 +1830,131 @@ function SpecsView() {
     syncSpecs();
   };
 
-  const filtered = specs.filter(s =>
-    [s.productCode, s.productName].some(v => v?.toLowerCase().includes(query.toLowerCase()))
+  const handleSort = (key: "code" | "name") => {
+    setSortState((prev) => {
+      if (prev.key !== key) return { key, dir: "asc" };
+      return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
+    });
+  };
+
+  const sortArrows = (key: "code" | "name") => {
+    const isActive = sortState.key === key;
+    return (
+      <span className={`wbwh-sort ${isActive ? "is-active" : ""}`} aria-hidden="true">
+        <span className={`wbwh-sort__arrow ${isActive && sortState.dir === "asc" ? "is-selected" : ""}`}>▲</span>
+        <span className={`wbwh-sort__arrow ${isActive && sortState.dir === "desc" ? "is-selected" : ""}`}>▼</span>
+      </span>
+    );
+  };
+
+  const filtered = specs.filter((s) =>
+    [s.productCode, s.productName].some((v) =>
+      v?.toLowerCase().includes(query.toLowerCase())
+    )
   );
+
+  const sorted = React.useMemo(() => {
+    const dir = sortState.dir === "asc" ? 1 : -1;
+    const getValue = (s: Spec) =>
+      sortState.key === "code" ? s.productCode || "" : s.productName || "";
+    return [...filtered].sort((a, b) =>
+      getValue(a).localeCompare(getValue(b), "ru", { sensitivity: "base" }) * dir
+    );
+  }, [filtered, sortState]);
 
   return (
     <>
-      <div className="app-plate app-plate--solid p-3">
-        {/* тулбар */}
-        <div className="flex items-center gap-2 mb-2">
-          <input
-            className="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-sm"
-            placeholder="Поиск"
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-          />
-          <button
-            onClick={syncSpecs}
-            className="app-pill app-pill--md"
-            disabled={syncing}
-            title="Обновить список из Supabase"
-          >
-            {syncing ? "Обновляем…" : "Обновить"}
-          </button>
-          <button
-            onClick={openCreate}
-            className="app-pill app-pill--md is-active inline-flex items-center gap-2"
-          >
-            <Plus className="w-4 h-4" /> Создать
-          </button>
-        </div>
-        {lastSync && (
-          <div className="text-xs text-slate-400 mb-2">
-            Обновлено: {new Date(lastSync).toLocaleString("ru-RU")}
+      <div className="mrp-page">
+        <div className="mrp-page-head">
+          <div className="mrp-title-row">
+            <h1 className="mrp-title">Спецификации</h1>
+            <span className="mrp-count">{filtered.length}</span>
           </div>
-        )}
+          <div className="mrp-actions">
+            <button onClick={openCreate} className="mrp-btn mrp-btn--primary">
+              <Plus className="w-4 h-4" /> Создать
+            </button>
+          </div>
+        </div>
 
-        <div className="overflow-auto rounded-xl border border-slate-100 bg-white">
-          <table className="min-w-full text-sm table-compact">
-            <thead className="bg-slate-50 text-slate-500">
-              <tr>
-                <th className="text-left px-3 py-2">Код спецификации</th>
-                <th className="text-left px-3 py-2">Название</th>
-                <th className="text-left px-3 py-2">Позиций</th>
-                <th className="text-left px-3 py-2">Обновлено</th>
-                <th className="text-left px-3 py-2">Действия</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(filtered.length > 0 ? filtered : []).map(s => (
-                <tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50">
-                  <td className="px-3 py-2">{s.productCode || "—"}</td>
-                  <td className="px-3 py-2">{s.productName || "—"}</td>
-                  <td className="px-3 py-2">{s.lines.length}</td>
-                  <td className="px-3 py-2">{new Date(s.updatedAt).toLocaleString("ru-RU")}</td>
-                  <td className="px-3 py-2 actions-cell">
-                    <div className="actions-inline">
-                      <button
-                        type="button"
-                        className="act" data-action="edit"
-                        title="Редактировать"
-                        onClick={() => openEdit(s)}
-                      >
-                        <Pencil />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-3 py-10 text-center text-slate-400">
-                    Спецификаций нет
-                  </td>
-                </tr>
+        <div className="mrp-card">
+          <div className="mrp-toolbar">
+            <div className="mrp-toolbar__left">
+              <div className="mrp-search-input">
+                <Search className="w-4 h-4" />
+                <input
+                  placeholder="Поиск по коду или названию…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="mrp-toolbar__right">
+              <button
+                onClick={syncSpecs}
+                className="mrp-btn mrp-btn--ghost"
+                disabled={syncing}
+                title="Обновить список из Supabase"
+              >
+                {syncing ? "Обновляем…" : "Обновить"}
+              </button>
+              {lastSync && (
+                <div className="text-xs text-slate-400">
+                  Обновлено: {new Date(lastSync).toLocaleString("ru-RU")}
+                </div>
               )}
-            </tbody>
-          </table>
+            </div>
+          </div>
+
+          <div className="mrp-hscroll">
+            <table className="mrp-table text-sm">
+              <thead>
+                <tr>
+                  <th className="text-left px-2 py-2 wbwh-sortable" onClick={() => handleSort("code")}>
+                    Код спецификации{sortArrows("code")}
+                  </th>
+                  <th className="text-left px-2 py-2 wbwh-sortable" onClick={() => handleSort("name")}>
+                    Название{sortArrows("name")}
+                  </th>
+                  <th className="text-left px-2 py-2">Позиций</th>
+                  <th className="text-left px-2 py-2">Обновлено</th>
+                  <th className="text-left px-2 py-2">Действия</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(sorted.length > 0 ? sorted : []).map((s) => (
+                  <tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50">
+                    <td className="px-2 py-2">
+                      <span className="mrp-code">{s.productCode || "—"}</span>
+                    </td>
+                    <td className="px-2 py-2">{s.productName || "—"}</td>
+                    <td className="px-2 py-2">{s.lines.length}</td>
+                    <td className="px-2 py-2">{new Date(s.updatedAt).toLocaleString("ru-RU")}</td>
+                    <td className="px-2 py-2 actions-cell">
+                      <div className="actions-inline">
+                        <button
+                          type="button"
+                          className="act act--ghost"
+                          data-action="edit"
+                          title="Редактировать"
+                          onClick={() => openEdit(s)}
+                        >
+                          <Pencil />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {sorted.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-2 py-10 text-center text-slate-400">
+                      Спецификаций нет
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -1563,10 +1968,135 @@ function SpecsView() {
 
 
 /* ===================== MAIN SHELL ===================== */
+function AuthView({
+  mode,
+  email,
+  password,
+  loading,
+  error,
+  onEmailChange,
+  onPasswordChange,
+  onSubmit,
+  onToggleMode,
+}: {
+  mode: "signin" | "signup";
+  email: string;
+  password: string;
+  loading: boolean;
+  error: string | null;
+  onEmailChange: (v: string) => void;
+  onPasswordChange: (v: string) => void;
+  onSubmit: () => void;
+  onToggleMode: () => void;
+}) {
+  return (
+    <div className="mrp-auth">
+      <div className="mrp-auth-card">
+        <div className="mrp-auth-title">
+          {mode === "signin" ? "Вход" : "Регистрация"}
+        </div>
+        <div className="mrp-auth-subtitle">
+          Доступ получают все зарегистрированные пользователи.
+        </div>
+        <div className="mrp-auth-field">
+          <label>Email</label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => onEmailChange(e.target.value)}
+            placeholder="name@company.com"
+          />
+        </div>
+        <div className="mrp-auth-field">
+          <label>Пароль</label>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => onPasswordChange(e.target.value)}
+            placeholder="Минимум 6 символов"
+          />
+        </div>
+        {error && <div className="mrp-auth-error">{error}</div>}
+        <div className="mrp-auth-actions">
+          <button className="mrp-btn mrp-btn--primary" onClick={onSubmit} disabled={loading}>
+            {loading ? "Подождите..." : mode === "signin" ? "Войти" : "Зарегистрироваться"}
+          </button>
+          <button className="mrp-btn mrp-btn--ghost" onClick={onToggleMode} disabled={loading}>
+            {mode === "signin" ? "Нет аккаунта" : "Уже есть аккаунт"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AppShell() {
   const [nav, setNav] = useLocalState<Section[]>("mrp.nav.v3", DEFAULT_NAV);
+  // автоматически добавляем новую вкладку "Группы" в настройки, если у пользователя ещё сохранена старая конфигурация навигации
+  useEffect(() => {
+    setNav(prev => {
+      let updated = false;
+      const next = prev.map(section => {
+        if (section.key !== "settings") return section;
+        const subs = section.subs ?? [];
+        if (subs.some(sub => sub.key === "groups")) return section;
+        const nextSubs = [...subs];
+        const catsIdx = nextSubs.findIndex(sub => sub.key === "cats");
+        const groupSub = { key: "groups", title: "Группы", route: "/app/settings/groups" };
+        if (catsIdx >= 0) nextSubs.splice(catsIdx + 1, 0, groupSub);
+        else nextSubs.push(groupSub);
+        updated = true;
+        return { ...section, subs: nextSubs };
+      });
+      return updated ? next : prev;
+    });
+  }, [setNav]);
+  useEffect(() => {
+    setNav((prev) => {
+      let updated = false;
+      const next = prev.map((section) => {
+        if (section.key !== "settings") return section;
+        const subs = section.subs ?? [];
+        if (subs.some((sub) => sub.key === "mpwh")) return section;
+        const nextSubs = [...subs];
+        const whIdx = nextSubs.findIndex((sub) => sub.key === "wh");
+        const mpwhSub = { key: "mpwh", title: "МП склады", route: "/app/settings/mpwh" };
+        if (whIdx >= 0) nextSubs.splice(whIdx + 1, 0, mpwhSub);
+        else nextSubs.push(mpwhSub);
+        updated = true;
+        return { ...section, subs: nextSubs };
+      });
+      return updated ? next : prev;
+    });
+  }, [setNav]);
+  useEffect(() => {
+    setNav((prev) => {
+      let updated = false;
+      const next = prev.map((section) => {
+        if (section.key !== "sales") return section;
+        const subs = section.subs ?? [];
+        if (subs.some((sub) => sub.key === "wbwh")) return section;
+        const nextSubs = [...subs];
+        const mpIdx = nextSubs.findIndex((sub) => sub.key === "mp");
+        const wbwhSub = { key: "wbwh", title: "Склады WB", route: "/app/sales/wb-warehouses" };
+        if (mpIdx >= 0) nextSubs.splice(mpIdx + 1, 0, wbwhSub);
+        else nextSubs.push(wbwhSub);
+        updated = true;
+        return { ...section, subs: nextSubs };
+      });
+      return updated ? next : prev;
+    });
+  }, [setNav]);
   const [collapsed, setCollapsed] = useLocalState<boolean>("mrp.sidebarCollapsed", false);
-  const sidebarW = collapsed ? 68 : 256;
+  const sidebarW = collapsed ? 68 : 288;
+
+  const [session, setSession] = useState<Session | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
 
   const [activeSectionKey, setActiveSectionKey] = useLocalState<string>("mrp.activeSection", nav[0]?.key ?? "mfg");
   const currentSection = useMemo(
@@ -1574,6 +2104,10 @@ export default function AppShell() {
     [nav, activeSectionKey]
   );
   const [activeSubKey, setActiveSubKey] = useLocalState<string>("mrp.activeSub", currentSection?.subs?.[0]?.key ?? "");
+  const activeSub = useMemo(
+    () => currentSection?.subs?.find((s) => s.key === activeSubKey),
+    [currentSection, activeSubKey]
+  );
 
   useEffect(() => {
     if (!currentSection?.subs.find(x => x.key === activeSubKey)) {
@@ -1581,17 +2115,156 @@ export default function AppShell() {
     }
   }, [activeSectionKey]); // eslint-disable-line
 
+  useEffect(() => {
+    let mounted = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      setSession(data.session ?? null);
+    });
+    const { data } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      setAuthError(null);
+    });
+    return () => {
+      mounted = false;
+      data.subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadProfile = async () => {
+      if (!session?.user) {
+        setProfile(null);
+        setAuthLoading(false);
+        return;
+      }
+      setAuthLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("id,email,phone,is_active")
+          .eq("id", session.user.id)
+          .maybeSingle();
+        if (error) throw error;
+        if (!data) {
+          const { data: inserted, error: insertError } = await supabase
+            .from("profiles")
+            .upsert({
+              id: session.user.id,
+              email: session.user.email,
+              phone: session.user.phone,
+              is_active: true,
+            })
+            .select("id,email,phone,is_active")
+            .single();
+          if (insertError) throw insertError;
+          if (!cancelled) setProfile(inserted);
+        } else if (!cancelled) {
+          setProfile(data);
+        }
+      } catch (e) {
+        if (!cancelled) setAuthError("Не удалось загрузить профиль пользователя.");
+      } finally {
+        if (!cancelled) setAuthLoading(false);
+      }
+    };
+    loadProfile();
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user?.id]);
+
+  const submitAuth = async () => {
+    const email = authEmail.trim();
+    if (!email || !authPassword.trim()) {
+      setAuthError("Введите email и пароль.");
+      return;
+    }
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      if (authMode === "signin") {
+        const { error } = await supabase.auth.signInWithPassword({ email, password: authPassword });
+        if (error) throw error;
+      } else {
+        const { data, error } = await supabase.auth.signUp({ email, password: authPassword });
+        if (error) throw error;
+        if (!data.session) {
+          setAuthError("Проверьте почту для подтверждения регистрации.");
+        }
+      }
+    } catch (e: any) {
+      setAuthError(e?.message ?? "Ошибка авторизации.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
   const pill = (isActive?: boolean) => `app-pill app-pill--md ${isActive ? "is-active" : ""}`;
+
+  if (authLoading && !session) {
+    return (
+      <div className="mrp-auth">
+        <div className="mrp-auth-card">Загрузка...</div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <AuthView
+        mode={authMode}
+        email={authEmail}
+        password={authPassword}
+        loading={authLoading}
+        error={authError}
+        onEmailChange={setAuthEmail}
+        onPasswordChange={setAuthPassword}
+        onSubmit={submitAuth}
+        onToggleMode={() => {
+          setAuthMode((prev) => (prev === "signin" ? "signup" : "signin"));
+          setAuthError(null);
+        }}
+      />
+    );
+  }
+
+  if (profile && !profile.is_active) {
+    return (
+      <div className="mrp-auth">
+        <div className="mrp-auth-card">
+          <div className="mrp-auth-title">Доступ отключен</div>
+          <div className="mrp-auth-subtitle">
+            Ваш доступ временно заблокирован. Обратитесь к администратору.
+          </div>
+          <button className="mrp-btn mrp-btn--primary" onClick={() => supabase.auth.signOut()}>
+            Выйти
+          </button>
+        </div>
+      </div>
+    );
+  }
   
   return (
     <div className="min-h-screen w-full bg-transparent text-slate-900">
 {/* -------- Sidebar -------- */}
-<aside id="mrp-sidebar" data-collapsed={collapsed} className={`${collapsed ? "w-[68px]" : "w-64"}`}>
+<aside
+  id="mrp-sidebar"
+  data-collapsed={collapsed}
+  className="transition-[width] duration-200"
+  style={{ width: `${sidebarW}px` }}
+>
   <div className="sidebar-header">
     <button title="Меню" onClick={() => setCollapsed(v => !v)}>
       <MenuIcon className="w-5 h-5" />
     </button>
-    {!collapsed && <div className="ml-2 font-semibold tracking-tight">MRP-lite</div>}
+    {!collapsed && (
+      <div className="ml-2 flex items-center gap-2 font-semibold tracking-tight">
+        <span className="mrp-logo">◆</span>
+        <span>MRP‑lite</span>
+      </div>
+    )}
   </div>
 
   <nav className="sidenav">
@@ -1627,26 +2300,32 @@ export default function AppShell() {
         style={{ marginLeft: `${sidebarW}px`, ["--sidebar-w" as any]: `${sidebarW}px` }}
       >
         {/* Top bar */}
-        <div className="sticky top-0 z-0 px-0 pt-0">
-          <div className="app-plate mrp-toolbar h-12 rounded-2xl shadow-sm border border-slate-200 bg-white flex items-center px-4 gap-3">
-            <div className="hidden md:flex items-center gap-2">
-              {(currentSection?.subs ?? []).map(t => {
-                const active = t.key === activeSubKey;
-                return (
-                  <button key={t.key} onClick={() => setActiveSubKey(t.key)} className={pill(active)}>
-                    {t.title}
-                  </button>
-                );
-              })}
+        <div className="sticky top-0 z-10 px-0 pt-0">
+          <div className="mrp-topbar">
+            <div className="mrp-breadcrumbs">
+              <span>{currentSection?.title}</span>
+              <span className="mrp-breadcrumbs__sep">/</span>
+              <span className="is-active">{activeSub?.title ?? "—"}</span>
             </div>
 
-            <div className="ml-auto relative" style={{ minWidth: 220 }}>
-              <Search className="w-4 h-4 absolute left-2 top-2.5 text-slate-400" />
-              <input
-                placeholder="Поиск"
-                className="pl-8 pr-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
+            <div className="mrp-topbar__right">
+              <div className="mrp-search">
+                <Search className="w-4 h-4" />
+                <input placeholder="Быстрый поиск…" />
+                <span className="mrp-kbd">⌘K</span>
+              </div>
+              <div className="mrp-avatar">AK</div>
             </div>
+          </div>
+          <div className="mrp-subnav">
+            {(currentSection?.subs ?? []).map(t => {
+              const active = t.key === activeSubKey;
+              return (
+                <button key={t.key} onClick={() => setActiveSubKey(t.key)} className={pill(active)}>
+                  {t.title}
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -1671,15 +2350,37 @@ export default function AppShell() {
           ) : currentSection?.key === "stock" && activeSubKey === "balances" ? (
             <BalancesView />                                   
           ) : currentSection?.key === "settings" && activeSubKey === "uom" ? (
-            <SettingsUoms />
+            <div className="settings-wrap">
+              <SettingsUoms />
+            </div>
           ) : currentSection?.key === "settings" && activeSubKey === "curr" ? (
-            <SettingsCurrencies />
+            <div className="settings-wrap">
+              <SettingsCurrencies />
+            </div>
           ) : currentSection?.key === "settings" && activeSubKey === "cats" ? (
-            <SettingsCategories />
+            <div className="settings-wrap">
+              <SettingsCategories />
+            </div>
+          ) : currentSection?.key === "settings" && activeSubKey === "groups" ? (
+            <div className="settings-wrap">
+              <SettingsGroups />
+            </div>
+          ) : currentSection?.key === "sales" && activeSubKey === "mp" ? (
+            <MarketplacesView />
+          ) : currentSection?.key === "sales" && activeSubKey === "wbwh" ? (
+            <WbWarehousesView />
           ) : currentSection?.key === "settings" && activeSubKey === "wh" ? (
-            <SettingsWarehouses />
-            ) : currentSection?.key === "settings" && activeSubKey === "integr" ? (
-            <SettingsIntegrations />
+            <div className="settings-wrap">
+              <SettingsWarehouses />
+            </div>
+          ) : currentSection?.key === "settings" && activeSubKey === "mpwh" ? (
+            <div className="settings-wrap">
+              <SettingsMarketplaceWarehouses />
+            </div>
+          ) : currentSection?.key === "settings" && activeSubKey === "integr" ? (
+            <div className="settings-wrap">
+              <SettingsIntegrations />
+            </div>
           ) : (
             <div className="text-slate-600">
               Здесь будет контент <b>{currentSection?.key}</b> / <b>{activeSubKey}</b>
@@ -1721,12 +2422,12 @@ function DictList({
     <div className="app-plate app-plate--solid p-3">
       <div className="flex items-center gap-2 mb-2">
         <div className="text-sm text-slate-600">{title}: {items.length}</div>
-        <button className="app-pill app-pill--md is-active" onClick={add}>
+        <button className="mrp-btn mrp-btn--primary" onClick={add}>
           <Plus className="w-4 h-4" /> Добавить
         </button>
       </div>
       <div className="overflow-auto rounded-xl border border-slate-100 bg-white">
-        <table className="min-w-full text-sm table-compact">
+        <table className="mrp-table text-sm">
           <thead className="bg-slate-50 text-slate-500">
             <tr>
               <th className="text-left px-3 py-2">Значение</th>
@@ -1741,7 +2442,7 @@ function DictList({
                   <div className="flex items-center gap-2">
                     {allowRename && (
                       <button
-                        className="act" data-action="edit"
+                        className="mrp-icon-btn"
                         title="Переименовать"
                         onClick={() => rename(v)}
                       >
@@ -1749,7 +2450,7 @@ function DictList({
                       </button>
                     )}
                     <button
-                      className="act" data-action="delete"
+                      className="mrp-icon-btn"
                       title="Удалить"
                       onClick={() => remove(v)}
                     >
@@ -1794,12 +2495,12 @@ function SettingsUoms() {
     <div className="app-plate app-plate--solid p-3">
       <div className="flex items-center gap-2 mb-2">
         <div className="text-sm text-slate-600">Единицы измерения: {uoms.length}</div>
-        <button className="app-pill app-pill--md is-active" onClick={handleAdd}>
+        <button className="mrp-btn mrp-btn--primary" onClick={handleAdd}>
           + Добавить
         </button>
       </div>
       <div className="overflow-auto rounded-xl border border-slate-100 bg-white">
-        <table className="min-w-full text-sm table-compact">
+        <table className="mrp-table text-sm">
           <thead className="bg-slate-50 text-slate-500">
             <tr>
               <th className="text-left px-3 py-2">Название</th>
@@ -1813,16 +2514,14 @@ function SettingsUoms() {
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-2">
                     <button
-                      className="act"
-                      data-action="edit"
+                      className="mrp-icon-btn"
                       title="Переименовать"
                       onClick={() => handleRename(u.id, u.name)}
                     >
                       <Pencil className="w-4 h-4" />
                     </button>
                     <button
-                      className="act"
-                      data-action="delete"
+                      className="mrp-icon-btn"
                       title="Удалить"
                       onClick={() => handleDelete(u.id, u.name)}
                     >
@@ -1850,6 +2549,79 @@ function SettingsCurrencies() {
   // валюты обычно не переименовывают — запретим rename
   return <DictList title="Валюты" items={curr} setItems={setCurr} allowRename={false} placeholder="Новая валюта (например, GBP)" />;
 }
+
+function SettingsGroups() {
+  const { groups, addGroup, renameGroup, removeGroup } = useSupabaseGroups();
+
+  const handleAdd = async () => {
+    const v = (window.prompt("Новая группа") ?? "").trim();
+    if (!v) return;
+    await addGroup(v);
+  };
+  const handleRename = async (id: string, current: string) => {
+    const v = (window.prompt("Новое название группы", current) ?? "").trim();
+    if (!v || v === current) return;
+    await renameGroup(id, current, v);
+  };
+  const handleRemove = async (id: string, name: string) => {
+    if (!window.confirm(`Удалить группу «${name}»?`)) return;
+    await removeGroup(id, name);
+  };
+
+  return (
+    <div className="app-plate app-plate--solid p-3">
+      <div className="flex items-center gap-2 mb-2">
+        <div className="text-sm text-slate-600">Группы материалов: {groups.length}</div>
+        <button className="mrp-btn mrp-btn--primary" onClick={handleAdd}>
+          + Добавить
+        </button>
+      </div>
+      <div className="overflow-auto rounded-xl border border-slate-100 bg-white">
+        <table className="mrp-table text-sm">
+          <thead className="bg-slate-50 text-slate-500">
+            <tr>
+              <th className="text-left px-3 py-2">Группа</th>
+              <th className="text-left px-3 py-2">Действия</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map((grp) => (
+              <tr key={grp.id} className="border-t border-slate-100 hover:bg-slate-50">
+                <td className="px-3 py-2">{grp.name}</td>
+                <td className="px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="mrp-icon-btn"
+                      title="Переименовать"
+                      onClick={() => handleRename(grp.id, grp.name)}
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button
+                      className="mrp-icon-btn"
+                      title="Удалить"
+                      onClick={() => handleRemove(grp.id, grp.name)}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {groups.length === 0 && (
+              <tr>
+                <td colSpan={2} className="px-3 py-6 text-center text-slate-400">
+                  Пусто
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function SettingsCategories() {
   const {
     categories,
@@ -1878,11 +2650,11 @@ function SettingsCategories() {
     <div className="app-plate app-plate--solid p-3">
       <div className="flex items-center gap-2 mb-2">
         <div className="text-sm text-slate-600">Категории: {categories.length}</div>
-        <button className="app-pill app-pill--md is-active" onClick={handleAdd}>+ Добавить</button>
+        <button className="mrp-btn mrp-btn--primary" onClick={handleAdd}>+ Добавить</button>
       </div>
 
       <div className="overflow-auto rounded-xl border border-slate-100 bg-white">
-        <table className="min-w-full text-sm table-compact">
+        <table className="mrp-table text-sm">
           <thead className="bg-slate-50 text-slate-500">
             <tr>
               <th className="text-left px-3 py-2">Категория</th>
@@ -1896,7 +2668,7 @@ function SettingsCategories() {
                 <td className="px-3 py-2">{cat.name}</td>
                 <td className="px-3 py-2">
                   <select
-                    className="px-2 py-1 rounded border text-sm"
+                    className="mrp-select mrp-select--sm"
                     value={cat.kind}
                     onChange={(e) =>
                       changeCategoryKind(cat.id, e.target.value as typeof cat.kind)
@@ -1910,16 +2682,14 @@ function SettingsCategories() {
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-2">
                     <button
-                      className="act"
-                      data-action="edit"
+                      className="mrp-icon-btn"
                       title="Переименовать"
                       onClick={() => handleRename(cat.id, cat.name)}
                     >
                       <Pencil className="w-4 h-4" />
                     </button>
                     <button
-                      className="act"
-                      data-action="delete"
+                      className="mrp-icon-btn"
                       title="Удалить"
                       onClick={() => handleRemove(cat.id, cat.name)}
                     >
@@ -1985,19 +2755,29 @@ function SettingsWarehouses() {
   };
 
   return (
-    <div className="app-plate app-plate--solid p-3">
-      <div className="flex items-center gap-2 mb-2">
-        <div className="text-sm text-slate-600">Физические склады: {physical.length}</div>
-        <button className="app-pill app-pill--md is-active" onClick={handleAddPhysical}><Plus className="w-4 h-4" /> Физический</button>
-      </div>
+    <div className="mrp-page">
+      <div className="mrp-card mrp-card--compact">
+        <div className="mrp-toolbar mrp-toolbar--compact mb-2">
+          <div className="mrp-toolbar__left">
+            <div className="mrp-field">
+              <span className="mrp-field__label">Физические склады</span>
+              <div className="text-xs text-slate-600">{physical.length}</div>
+            </div>
+          </div>
+          <div className="mrp-toolbar__right">
+            <button className="mrp-btn mrp-btn--primary mrp-btn--xs" onClick={handleAddPhysical}>
+              <Plus className="w-4 h-4" /> Физический
+            </button>
+          </div>
+        </div>
 
-      <div className="overflow-auto rounded-xl border border-slate-100 bg-white">
-        <table className="min-w-full text-sm table-compact">
+        <div className="mrp-hscroll">
+          <table className="mrp-table text-sm table-compact">
           <thead className="bg-slate-50 text-slate-500">
             <tr>
-              <th className="text-left px-3 py-2">Физический склад</th>
-              <th className="text-left px-3 py-2">Зоны (виртуальные)</th>
-              <th className="text-left px-3 py-2">Действия</th>
+              <th className="text-left px-2 py-1 w-[180px]">Физический склад</th>
+              <th className="text-left px-2 py-1">Зоны (виртуальные)</th>
+              <th className="text-left px-2 py-1 w-[90px]">Действия</th>
             </tr>
           </thead>
           <tbody>
@@ -2005,35 +2785,38 @@ function SettingsWarehouses() {
               const zones = zonesByPhys(p.id);
               return (
                 <tr key={p.id} className="border-t border-slate-100 align-top">
-                  <td className="px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <div className="font-medium">{p.name}</div>
-                    </div>
+                  <td className="px-2 py-1">
+                    <div className="font-medium">{p.name}</div>
                   </td>
-                  <td className="px-3 py-2">
-                    <div className="flex flex-wrap gap-2">
+                  <td className="px-2 py-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       {zones.map(z => (
-                        <div key={z.id} className="inline-flex items-center gap-2 px-2 py-1 rounded-lg border border-slate-200">
-                          <span>{z.name}</span>
-                          <button className="icon-btn" title="Переименовать" onClick={() => handleRename(z.id, z.name)}><Pencil className="w-4 h-4" /></button>
-                          <button className="icon-btn" title="Удалить" onClick={() => handleRemove(z.id, z.name)}><Trash2 className="w-4 h-4" /></button>
+                        <div key={z.id} className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border border-slate-200">
+                          <span className="text-xs">{z.name}</span>
+                          <div className="flex items-center gap-1">
+                            <button className="mrp-icon-btn mrp-icon-btn--xs" title="Переименовать" onClick={() => handleRename(z.id, z.name)}><Pencil className="w-3.5 h-3.5" /></button>
+                            <button className="mrp-icon-btn mrp-icon-btn--xs" title="Удалить" onClick={() => handleRemove(z.id, z.name)}><Trash2 className="w-3.5 h-3.5" /></button>
+                          </div>
                         </div>
                       ))}
-                      <button className="app-pill app-pill--sm is-active" onClick={() => handleAddZone(p.id)}><Plus className="w-3 h-3" /> Зона</button>
+                      <button className="mrp-btn mrp-btn--ghost mrp-btn--xs" onClick={() => handleAddZone(p.id)}>
+                        <Plus className="w-3 h-3" /> Зона
+                      </button>
                     </div>
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-2 py-1">
                     <div className="flex items-center gap-2">
-                      <button className="act" data-action="edit" title="Переименовать" onClick={() => handleRename(p.id, p.name)}><Pencil className="w-4 h-4" /></button>
-                      <button className="act" data-action="delete" title="Удалить" onClick={() => handleRemove(p.id, p.name)}><Trash2 className="w-4 h-4" /></button>
+                      <button className="mrp-icon-btn mrp-icon-btn--xs" title="Переименовать" onClick={() => handleRename(p.id, p.name)}><Pencil className="w-3.5 h-3.5" /></button>
+                      <button className="mrp-icon-btn mrp-icon-btn--xs" title="Удалить" onClick={() => handleRemove(p.id, p.name)}><Trash2 className="w-3.5 h-3.5" /></button>
                     </div>
                   </td>
                 </tr>
               );
             })}
-            {physical.length === 0 && <tr><td colSpan={3} className="px-3 py-6 text-center text-slate-400">Пока нет складов</td></tr>}
+            {physical.length === 0 && <tr><td colSpan={3} className="px-2 py-4 text-center text-slate-400">Пока нет складов</td></tr>}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );
@@ -2078,13 +2861,13 @@ function BalancesView() {
   return (
     <div className="app-plate app-plate--solid p-3">
       <div className="flex flex-wrap items-center gap-2 mb-2">
-        <select className="px-3 py-2 rounded-xl border text-sm" value={typeFilter} onChange={e => setTypeFilter(e.target.value as any)}>
+        <select className="mrp-select" value={typeFilter} onChange={e => setTypeFilter(e.target.value as any)}>
           <option value="all">Все</option>
           <option value="material">Материалы</option>
           <option value="product">Товары</option>
         </select>
 
-        <select className="px-3 py-2 rounded-xl border text-sm" value={whFilter} onChange={e => setWhFilter(e.target.value)}>
+        <select className="mrp-select" value={whFilter} onChange={e => setWhFilter(e.target.value)}>
           <option value="">Все склады</option>
           <optgroup label="Физические">
             {physical.map(p => <option key={p.id} value={p.id} disabled>{p.name}</option>)}
@@ -2101,7 +2884,7 @@ function BalancesView() {
       </div>
 
       <div className="overflow-auto rounded-xl border border-slate-100 bg-white">
-        <table className="min-w-full text-sm table-compact">
+        <table className="mrp-table text-sm">
           <thead className="bg-slate-50 text-slate-500">
             <tr>
               <th className="text-left px-3 py-2">Тип</th>
@@ -2154,6 +2937,10 @@ function ProdReportsView() {
   const [warehouses, setWarehouses] = useState<WarehouseMap>({});
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
+  const [sortState, setSortState] = useState<{
+    key: "number" | "product";
+    dir: "asc" | "desc";
+  }>({ key: "number", dir: "desc" });
 
   const refreshWarehouses = useCallback(async () => {
     const { data, error } = await supabase
@@ -2240,65 +3027,124 @@ function ProdReportsView() {
     );
   });
 
-  return (
-    <div className="app-plate app-plate--solid p-3">
-      <div className="flex items-center gap-2 mb-2 flex-wrap">
-        <input
-          className="flex-1 min-w-[200px] px-3 py-2 rounded-xl border border-slate-200 text-sm"
-          placeholder="Поиск по номеру или товару"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <button className="app-pill app-pill--md" onClick={refreshReports} disabled={loading}>
-          {loading ? "Обновляем…" : "Обновить"}
-        </button>
-        <span className="text-xs text-slate-500">
-          Документы создаются автоматически при вводе факта в «Плане партии».
-        </span>
-      </div>
+  const handleSort = (key: "number" | "product") => {
+    setSortState((prev) => {
+      if (prev.key !== key) return { key, dir: "asc" };
+      return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
+    });
+  };
 
-      <div className="overflow-auto rounded-xl border border-slate-100 bg-white">
-        <table className="min-w-full text-sm table-compact">
-          <thead className="bg-slate-50 text-slate-500">
-            <tr>
-              <th className="text-left px-3 py-2">Номер / Дата</th>
-              <th className="text-left px-3 py-2">Товар</th>
-              <th className="text-left px-3 py-2 w-[90px]">Кол-во</th>
-              <th className="text-left px-3 py-2">Склад (ГП / Мат.)</th>
-              <th className="text-left px-3 py-2 w-[120px]">Статус</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((d) => (
-              <tr key={d.id} className="border-t border-slate-100">
-                <td className="px-3 py-2">
-                  <div className="font-medium">{d.number}</div>
-                  <div className="text-slate-500 text-xs">
-                    {new Date(d.dateISO).toLocaleString("ru-RU")}
-                  </div>
-                </td>
-                <td className="px-3 py-2">
-                  {d.product ? `${d.product.code} — ${d.product.name}` : "—"}
-                </td>
-                <td className="px-3 py-2">{d.qty}</td>
-                <td className="px-3 py-2">
-                  <div>ГП: {fmtZone(d.fgZoneId) || "—"}</div>
-                  <div className="text-xs text-slate-500">Мат.: {fmtZone(d.matZoneId) || "—"}</div>
-                </td>
-                <td className="px-3 py-2">
-                  {d.status === "posted" ? "Проведён" : d.status === "draft" ? "Черновик" : d.status}
-                </td>
-              </tr>
-            ))}
-            {filtered.length === 0 && (
+  const sortArrows = (key: "number" | "product") => {
+    const isActive = sortState.key === key;
+    return (
+      <span className={`wbwh-sort ${isActive ? "is-active" : ""}`} aria-hidden="true">
+        <span className={`wbwh-sort__arrow ${isActive && sortState.dir === "asc" ? "is-selected" : ""}`}>▲</span>
+        <span className={`wbwh-sort__arrow ${isActive && sortState.dir === "desc" ? "is-selected" : ""}`}>▼</span>
+      </span>
+    );
+  };
+
+  const sorted = React.useMemo(() => {
+    const dir = sortState.dir === "asc" ? 1 : -1;
+    const getValue = (r: ReportRow) => {
+      if (sortState.key === "product") {
+        return r.product ? `${r.product.code} ${r.product.name}` : "";
+      }
+      return r.number ?? "";
+    };
+    return [...filtered].sort((a, b) =>
+      getValue(a).localeCompare(getValue(b), "ru", { sensitivity: "base" }) * dir
+    );
+  }, [filtered, sortState]);
+
+  return (
+    <div className="mrp-page">
+      <div className="mrp-card">
+        <div className="mrp-toolbar mb-2">
+          <div className="mrp-toolbar__left">
+            <button className="mrp-btn mrp-btn--ghost" onClick={refreshReports} disabled={loading}>
+              {loading ? "Обновляем…" : "Обновить"}
+            </button>
+            <span className="text-xs text-slate-500">
+              Документы создаются автоматически при вводе факта в «Плане партии».
+            </span>
+            <div className="mrp-search-input">
+              <Search className="w-4 h-4" />
+              <input
+                placeholder="Поиск по номеру или товару"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="mrp-toolbar__right">
+            <div className="mrp-field">
+              <span className="mrp-field__label">Всего</span>
+              <div className="text-sm text-slate-600">{filtered.length}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mrp-hscroll">
+          <table className="mrp-table text-sm table-compact">
+            <thead>
               <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-slate-400">
-                  Документы не найдены
-                </td>
+                <th className="text-left px-3 py-2 wbwh-sortable" onClick={() => handleSort("number")}>
+                  Номер / Дата{sortArrows("number")}
+                </th>
+                <th className="text-left px-3 py-2 wbwh-sortable" onClick={() => handleSort("product")}>
+                  Товар{sortArrows("product")}
+                </th>
+                <th className="text-left px-3 py-2 w-[90px]">Кол-во</th>
+                <th className="text-left px-3 py-2">Склад (ГП / Мат.)</th>
+                <th className="text-left px-3 py-2 w-[120px]">Статус</th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {sorted.map((d) => (
+                <tr key={d.id} className="border-t border-slate-100">
+                  <td className="px-3 py-2">
+                    <div className="font-medium">{d.number}</div>
+                    <div className="text-slate-500 text-xs">
+                      {new Date(d.dateISO).toLocaleString("ru-RU")}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="flex flex-col gap-1">
+                      <span className="mrp-code">{d.product?.code ?? "—"}</span>
+                      <span className="text-slate-700 text-sm leading-snug line-clamp-2">
+                        {d.product?.name ?? "—"}
+                      </span>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2">{d.qty}</td>
+                  <td className="px-3 py-2">
+                    <div>ГП: {fmtZone(d.fgZoneId) || "—"}</div>
+                    <div className="text-xs text-slate-500">Мат.: {fmtZone(d.matZoneId) || "—"}</div>
+                  </td>
+                  <td className="px-3 py-2">
+                    <span
+                      className={
+                        d.status === "draft"
+                          ? "mrp-status mrp-status--draft"
+                          : "mrp-status"
+                      }
+                    >
+                      {d.status === "posted" ? "Проведён" : d.status === "draft" ? "Черновик" : d.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+              {sorted.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-3 py-6 text-center text-slate-400">
+                    Документы не найдены
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -2311,6 +3157,10 @@ function ReceiptsView() {
   const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
+  const [sortState, setSortState] = useState<{
+    key: "number" | "vendor";
+    dir: "asc" | "desc";
+  }>({ key: "number", dir: "asc" });
   const [detailReceipt, setDetailReceipt] = useState<ReceiptRow | null>(null);
   const [detailLines, setDetailLines] = useState<ReceiptLine[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -2358,6 +3208,14 @@ function ReceiptsView() {
     [warehouseMap]
   );
 
+  const vendorTitle = useCallback(
+    (doc: ReceiptRow) => {
+      if (doc.vendorId && vendorMap.get(doc.vendorId)) return vendorMap.get(doc.vendorId);
+      return doc.supplierName || "—";
+    },
+    [vendorMap]
+  );
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return receipts;
@@ -2375,6 +3233,34 @@ function ReceiptsView() {
       return haystack.includes(q);
     });
   }, [receipts, search, vendorMap, fmtZone]);
+
+  const handleSort = (key: "number" | "vendor") => {
+    setSortState((prev) => {
+      if (prev.key !== key) return { key, dir: "asc" };
+      return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
+    });
+  };
+
+  const sortArrows = (key: "number" | "vendor") => {
+    const isActive = sortState.key === key;
+    return (
+      <span className={`wbwh-sort ${isActive ? "is-active" : ""}`} aria-hidden="true">
+        <span className={`wbwh-sort__arrow ${isActive && sortState.dir === "asc" ? "is-selected" : ""}`}>▲</span>
+        <span className={`wbwh-sort__arrow ${isActive && sortState.dir === "desc" ? "is-selected" : ""}`}>▼</span>
+      </span>
+    );
+  };
+
+  const sorted = useMemo(() => {
+    const dir = sortState.dir === "asc" ? 1 : -1;
+    const getValue = (doc: ReceiptRow) => {
+      if (sortState.key === "vendor") return vendorTitle(doc);
+      return doc.number ?? "";
+    };
+    return [...filtered].sort((a, b) =>
+      getValue(a).localeCompare(getValue(b), "ru", { sensitivity: "base" }) * dir
+    );
+  }, [filtered, sortState, vendorTitle]);
 
   const openDetails = useCallback(async (doc: ReceiptRow) => {
     setDetailReceipt(doc);
@@ -2416,14 +3302,6 @@ function ReceiptsView() {
     alert("Ручное создание поступлений пока не реализовано. Документы появляются автоматически при проведении приходов в разделе Материалы.");
   }, []);
 
-  const vendorTitle = useCallback(
-    (doc: ReceiptRow) => {
-      if (doc.vendorId && vendorMap.get(doc.vendorId)) return vendorMap.get(doc.vendorId);
-      return doc.supplierName || "—";
-    },
-    [vendorMap]
-  );
-
   const statusLabel = (status: ReceiptRow["status"]) => {
     if (status === "posted") return "Проведён";
     if (status === "canceled") return "Отменён";
@@ -2432,55 +3310,71 @@ function ReceiptsView() {
 
   return (
     <>
-      <div className="app-plate app-plate--solid p-3">
-        <div className="flex items-center gap-2 mb-2">
-          <input
-            className="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-sm"
-            placeholder="Поиск"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <button
-            onClick={refresh}
-            disabled={loading}
-            className="app-pill app-pill--md inline-flex items-center gap-2"
-          >
-            {loading ? "Обновляем…" : "Обновить"}
-          </button>
-          <button onClick={handleManualCreate} className="app-pill app-pill--md inline-flex items-center gap-2">
-            <Plus className="w-4 h-4" /> Создать
-          </button>
+      <div className="mrp-page">
+        <div className="mrp-page-head">
+          <div className="mrp-title-row">
+            <h1 className="mrp-title">Поступления</h1>
+            <span className="mrp-count">{filtered.length}</span>
+          </div>
+          <div className="mrp-actions">
+            <button onClick={handleManualCreate} className="mrp-btn mrp-btn--primary">
+              <Plus className="w-4 h-4" /> Создать
+            </button>
+          </div>
         </div>
 
-        <div className="overflow-auto rounded-xl border border-slate-100 bg-white">
-          <table className="min-w-full text-sm table-compact">
-            <thead className="bg-slate-50 text-slate-500">
-              <tr>
-                <th className="text-left px-3 py-2">Номер / Дата</th>
-                <th className="text-left px-3 py-2">Поставщик</th>
-                <th className="text-left px-3 py-2">Склад/Зона</th>
-                <th className="text-left px-3 py-2">Строк</th>
-                <th className="text-left px-3 py-2">Статус</th>
-                <th className="text-left px-3 py-2">Действия</th>
-              </tr>
-            </thead>
+        <div className="mrp-card">
+          <div className="mrp-toolbar">
+            <div className="mrp-toolbar__left">
+              <div className="mrp-search-input">
+                <Search className="w-4 h-4" />
+                <input
+                  placeholder="Поиск по номеру, поставщику, складу…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="mrp-toolbar__right">
+              <button onClick={refresh} disabled={loading} className="mrp-btn mrp-btn--ghost">
+                {loading ? "Обновляем…" : "Обновить"}
+              </button>
+            </div>
+          </div>
+
+          <div className="mrp-hscroll">
+            <table className="mrp-table text-sm">
+              <thead>
+                <tr>
+                  <th className="text-left px-2 py-2 wbwh-sortable" onClick={() => handleSort("number")}>
+                    Номер / Дата{sortArrows("number")}
+                  </th>
+                  <th className="text-left px-2 py-2 wbwh-sortable" onClick={() => handleSort("vendor")}>
+                    Поставщик{sortArrows("vendor")}
+                  </th>
+                  <th className="text-left px-2 py-2">Склад/Зона</th>
+                  <th className="text-left px-2 py-2">Строк</th>
+                  <th className="text-left px-2 py-2">Статус</th>
+                  <th className="text-left px-2 py-2">Действия</th>
+                </tr>
+              </thead>
 
             {/* ===== TBODY: рендер строк или заглушки без иконок ===== */}
             <tbody>
-              {filtered.length > 0 ? (
-                filtered.map((d) => {
+              {sorted.length > 0 ? (
+                sorted.map((d) => {
                   const venTitle = vendorTitle(d) || "—";
                   const whTitle = fmtZone(d.zoneId) || "—";
                   const statusClass =
                     d.status === "posted"
-                      ? "text-emerald-600"
+                      ? "mrp-status"
                       : d.status === "canceled"
-                      ? "text-rose-600"
-                      : "text-slate-500";
+                      ? "mrp-status mrp-status--archived"
+                      : "mrp-status mrp-status--draft";
                   return (
                     <tr key={d.id} className="border-t border-slate-100 hover:bg-slate-50">
                       {/* Номер / Дата */}
-                      <td className="px-3 py-2">
+                      <td className="px-2 py-2">
                         {(d.number ?? "").trim() || "—"}{" "}
                         <span className="text-slate-400">
                           / {new Date(d.dateISO).toLocaleString("ru-RU")}
@@ -2488,25 +3382,25 @@ function ReceiptsView() {
                       </td>
 
                       {/* Поставщик */}
-                      <td className="px-3 py-2">{venTitle}</td>
+                      <td className="px-2 py-2">{venTitle}</td>
 
                       {/* Склад/Зона */}
-                      <td className="px-3 py-2">{whTitle}</td>
+                      <td className="px-2 py-2">{whTitle}</td>
 
                       {/* Строк */}
-                      <td className="px-3 py-2">{d.itemCount}</td>
+                      <td className="px-2 py-2">{d.itemCount}</td>
 
                       {/* Статус */}
-                      <td className="px-3 py-2">
+                      <td className="px-2 py-2">
                         <span className={statusClass}>{statusLabel(d.status)}</span>
                       </td>
 
                       {/* Действия */}
-                      <td className="px-3 py-2 actions-cell">
+                      <td className="px-2 py-2 actions-cell">
                         <div className="actions-inline">
                           <button
                             type="button"
-                            className="act"
+                            className="act act--ghost"
                             data-action="details"
                             title="Показать строки"
                             onClick={() => openDetails(d)}
@@ -2517,7 +3411,7 @@ function ReceiptsView() {
                           {d.status === "posted" && (
                             <button
                               type="button"
-                              className="act"
+                              className="act act--ghost"
                               data-action="unpost"
                               title="Отменить проведение"
                               onClick={() => cancelReceipt(d)}
@@ -2532,7 +3426,7 @@ function ReceiptsView() {
                 })
               ) : (
                 <tr>
-                  <td colSpan={6} className="px-3 py-10 text-center text-slate-400">
+                  <td colSpan={6} className="px-2 py-10 text-center text-slate-400">
                     {loading ? "Загружаем…" : "Поступлений нет"}
                   </td>
                 </tr>
@@ -2541,6 +3435,7 @@ function ReceiptsView() {
           </table>
         </div>
       </div>
+    </div>
 
       {/* Детали поступления */}
       {detailReceipt && (
@@ -2568,7 +3463,7 @@ function ReceiptsView() {
               <div className="text-center text-slate-400 py-6">Строки отсутствуют</div>
             ) : (
               <div className="table-wrapper mt-2">
-                <table className="min-w-full text-sm table-compact">
+                <table className="mrp-table text-sm">
                   <thead>
                     <tr>
                       <th className="text-left px-2 py-2">Код</th>

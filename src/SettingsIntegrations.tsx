@@ -1,10 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./api/supabaseClient";
 import {
-  createCategorySupabase,
-  createUomSupabase,
   createVendorSupabase,
   fetchCategoriesSupabase,
+  fetchItemGroupsSupabase,
   fetchUomsSupabase,
   fetchVendorsSupabase,
 } from "./utils/dictsSupabase";
@@ -14,11 +13,15 @@ type Vendor = { id: string; name: string };
 type Material = {
   id: string; code: string; name: string;
   vendorId: string; uom: string; moq: number; leadTimeDays: number;
-  price?: number; currency?: string; category?: string;
+  price?: number; currency?: string; group?: string;
 };
 type Product = {
   id: string; status: string; code: string; name: string;
   category?: string; uom?: string; price?: number;
+  wbSku?: string; ozonSku?: string; barcode?: string;
+  mpCategoryWb?: string; mpCategoryOzon?: string;
+  boxLength?: number; boxWidth?: number; boxHeight?: number; boxWeight?: number;
+  unitsPerBox?: number; unitsPerPallet?: number; palletWeight?: number;
 };
 type SpecLine = { id: string; materialId: string; qty: number; uom: string };
 type Spec = {
@@ -117,7 +120,7 @@ V:ikea,IKEA
 V:local,Местный поставщик
 `,
   materials:
-`material_id,code,name,vendor_id,vendor_name,uom,moq,lead_time_days,price,currency,category
+`material_id,code,name,vendor_id,vendor_name,uom,moq,lead_time_days,price,currency,group
 ,MAT-001,Наименование 1,V:local,,кг,1,7,0,RUB,Химия
 ,MAT-002,Наименование 2,,Поставщик А,шт,1,0,,RUB,Упаковка
 `,
@@ -141,18 +144,21 @@ export default function SettingsIntegrations() {
   const [specs,     setSpecs]     = useLocalState<Spec[]>("mrp.specs.v1", []);
   const [uoms, setUoms] = useState<string[]>([]);
   const [cats, setCats] = useState<string[]>([]);
+  const [groupsDict, setGroupsDict] = useState<string[]>([]);
   const [specExporting, setSpecExporting] = useState(false);
 
   const refreshDicts = useCallback(async () => {
     try {
-      const [vendorRows, uomRows, catRows] = await Promise.all([
+      const [vendorRows, uomRows, catRows, groupRows] = await Promise.all([
         fetchVendorsSupabase(),
         fetchUomsSupabase(),
         fetchCategoriesSupabase(),
+        fetchItemGroupsSupabase(),
       ]);
       setVendors(vendorRows);
       setUoms(uomRows.map((u) => u.name));
       setCats(catRows.map((c) => c.name));
+      setGroupsDict(groupRows.map((g) => g.name));
     } catch (error) {
       console.error("SettingsIntegrations: load dictionaries", error);
     }
@@ -194,7 +200,7 @@ export default function SettingsIntegrations() {
 
     const next = new Map<string, Material>(materials.map(m => [m.id, m]));
     const vnext = new Map<string, Vendor>(vendors.map(v => [v.id, v]));
-    let uomsAcc = [...uoms], catsAcc = [...cats];
+    let uomsAcc = [...uoms], groupsAcc = [...groupsDict];
     const errors: string[] = [];
 
     for (const r of rows) {
@@ -215,18 +221,18 @@ export default function SettingsIntegrations() {
       const ltd = Math.max(0, Number(normalizeNumber(r.lead_time_days) ?? 0));
       const price = normalizeNumber(r.price) ?? undefined;
       const currency = (r.currency||"RUB").trim() || "RUB";
-      const category = (r.category||"").trim();
+      const group = (r.group||"").trim();
       const id = (r.material_id||"").trim() || matIdFromCode(code);
 
       uomsAcc = addIfMissing(uomsAcc, uom);
-      catsAcc = addIfMissing(catsAcc, category);
+      groupsAcc = addIfMissing(groupsAcc, group);
 
-      next.set(id, { id, code, name, vendorId: vendorId || "", uom, moq, leadTimeDays: ltd, price, currency, category });
+      next.set(id, { id, code, name, vendorId: vendorId || "", uom, moq, leadTimeDays: ltd, price, currency, group });
     }
 
     setVendors(Array.from(vnext.values()));
     setMaterials(Array.from(next.values()));
-    setUoms(uomsAcc); setCats(catsAcc);
+    setUoms(uomsAcc); setGroupsDict(groupsAcc);
     localStorage.setItem("mrp.dataset.version", new Date().toISOString());
     alert(`Импорт материалов: ok ${rows.length - errors.length}, ошибок ${errors.length}`);
   };
@@ -353,7 +359,7 @@ export default function SettingsIntegrations() {
           moq: 1,
           leadTimeDays: 0,
           price: undefined,
-          category: "",
+          group: "",
         };
       }
       return null;
@@ -368,6 +374,7 @@ export default function SettingsIntegrations() {
       legacyId?: string | null;
       uom?: string;
       category?: string;
+      groupName?: string;
       vendorName?: string | null;
       createIfMissing?: boolean;
     }): Promise<string | null> => {
@@ -408,12 +415,13 @@ export default function SettingsIntegrations() {
               status: "active",
               name: opts.name,
               uom: opts.uom || "шт",
-              category: opts.category || "",
               vendor_name: opts.vendorName || null,
               legacy_id: legacy,
               min_lot: 1,
               lead_days: 0,
             };
+            if (opts.category) payload.category = opts.category;
+            if (opts.groupName) payload.group_name = opts.groupName;
             const { data: inserted, error: insertErr } = await supabase
               .from("items")
               .insert(payload)
@@ -513,7 +521,7 @@ export default function SettingsIntegrations() {
               name: mat.name,
               legacyId: mat.id,
               uom: mat.uom,
-              category: mat.category,
+              groupName: mat.group,
               vendorName: mat.vendorId ? vendorById.get(mat.vendorId) ?? null : null,
             });
             if (!materialUuid) throw new Error("material uuid missing");
@@ -523,6 +531,7 @@ export default function SettingsIntegrations() {
               kind: "mat",
               ref_item_id: materialUuid,
               qty: line.qty,
+              uom: mat.uom || "шт",
             });
           } catch (err) {
             console.error("resolve material uuid", err);
@@ -573,32 +582,32 @@ export default function SettingsIntegrations() {
         <div className="mrp-card">
           <div className="font-medium mb-2">Поставщики</div>
           <div className="flex gap-2">
-            <button className="app-pill app-pill--md is-active" onClick={importVendorsCsv}>Импорт .csv</button>
-            <button className="app-pill app-pill--md" onClick={()=>dl("vendors")}>Скачать шаблон .csv</button>
+            <button className="mrp-btn mrp-btn--primary" onClick={importVendorsCsv}>Импорт .csv</button>
+            <button className="mrp-btn mrp-btn--ghost" onClick={()=>dl("vendors")}>Скачать шаблон .csv</button>
           </div>
         </div>
 
         <div className="mrp-card">
           <div className="font-medium mb-2">Материалы</div>
           <div className="flex gap-2">
-            <button className="app-pill app-pill--md is-active" onClick={importMaterialsCsv}>Импорт .csv</button>
-            <button className="app-pill app-pill--md" onClick={()=>dl("materials")}>Скачать шаблон .csv</button>
+            <button className="mrp-btn mrp-btn--primary" onClick={importMaterialsCsv}>Импорт .csv</button>
+            <button className="mrp-btn mrp-btn--ghost" onClick={()=>dl("materials")}>Скачать шаблон .csv</button>
           </div>
         </div>
 
         <div className="mrp-card">
           <div className="font-medium mb-2">Товары</div>
           <div className="flex gap-2">
-            <button className="app-pill app-pill--md is-active" onClick={importProductsCsv}>Импорт .csv</button>
-            <button className="app-pill app-pill--md" onClick={()=>dl("products")}>Скачать шаблон .csv</button>
+            <button className="mrp-btn mrp-btn--primary" onClick={importProductsCsv}>Импорт .csv</button>
+            <button className="mrp-btn mrp-btn--ghost" onClick={()=>dl("products")}>Скачать шаблон .csv</button>
           </div>
         </div>
 
         <div className="mrp-card">
           <div className="font-medium mb-2">Спецификации (BOM)</div>
           <div className="flex gap-2">
-            <button className="app-pill app-pill--md is-active" onClick={importSpecsCsv}>Импорт .csv</button>
-            <button className="app-pill app-pill--md" onClick={()=>dl("specs")}>Скачать шаблон .csv</button>
+            <button className="mrp-btn mrp-btn--primary" onClick={importSpecsCsv}>Импорт .csv</button>
+            <button className="mrp-btn mrp-btn--ghost" onClick={()=>dl("specs")}>Скачать шаблон .csv</button>
           </div>
         </div>
 
@@ -608,7 +617,7 @@ export default function SettingsIntegrations() {
             Берём спецификации из браузера и полностью заменяем их в таблицах `specs` / `spec_lines` Supabase.
           </p>
           <button
-            className="app-pill app-pill--md is-active"
+            className="mrp-btn mrp-btn--primary"
             onClick={exportSpecsToSupabase}
             disabled={specExporting}
           >
