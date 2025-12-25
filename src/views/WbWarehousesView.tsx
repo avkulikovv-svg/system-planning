@@ -35,7 +35,14 @@ export function WbWarehousesView() {
   const [error, setError] = React.useState<string | null>(null);
   const [openCell, setOpenCell] = React.useState<string | null>(null);
   const [summary, setSummary] = React.useState<{ total: number; received: number; errors: number } | null>(null);
-  const [syncInfo, setSyncInfo] = React.useState<Record<string, unknown> | null>(null);
+  const [syncInfo, setSyncInfo] = React.useState<{
+    totalCards?: number;
+    matchedByCode?: number;
+    matchedByBarcode?: number;
+    suppliesTotal?: number;
+    suppliesMatched?: number;
+    updated?: number;
+  } | null>(null);
   const [sortState, setSortState] = React.useState<{ key: SortKey; dir: SortDir }>({
     key: "category",
     dir: "asc",
