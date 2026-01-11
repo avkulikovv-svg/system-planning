@@ -47,6 +47,10 @@ export default function SettingsMarketplaceWarehouses() {
     CLIENT: true,
   });
   const [syncing, setSyncing] = useState<Record<MarketplaceChannelCode, boolean>>({ WB: false, OZON: false });
+  const [clientModalOpen, setClientModalOpen] = useState(false);
+  const [clientName, setClientName] = useState("");
+  const [clientRegion, setClientRegion] = useState("");
+  const [clientAddress, setClientAddress] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -147,15 +151,11 @@ export default function SettingsMarketplaceWarehouses() {
       alert("Нет канала CLIENT в справочнике mp_channels");
       return;
     }
-    const name = (window.prompt("Название склада клиента:") ?? "").trim();
-    if (!name) return;
-    const region = (window.prompt("Регион / город:", "") ?? "").trim();
-    const address = (window.prompt("Адрес:", "") ?? "").trim();
     const { error: insertErr } = await supabase.from("mp_destinations").insert({
       channel_id: channel.id,
-      name,
-      region: region || null,
-      address: address || null,
+      name: clientName.trim(),
+      region: clientRegion.trim() || null,
+      address: clientAddress.trim() || null,
       is_active: true,
     });
     if (insertErr) {
@@ -163,6 +163,10 @@ export default function SettingsMarketplaceWarehouses() {
       alert("Не удалось добавить склад клиента");
       return;
     }
+    setClientModalOpen(false);
+    setClientName("");
+    setClientRegion("");
+    setClientAddress("");
     await load();
   };
 
@@ -184,7 +188,7 @@ export default function SettingsMarketplaceWarehouses() {
         >
           {syncing.OZON ? "Ozon…" : "Синхр. Ozon"}
         </button>
-        <button className="mrp-btn mrp-btn--primary" onClick={addClientWarehouse}>
+        <button className="mrp-btn mrp-btn--primary" onClick={() => setClientModalOpen(true)}>
           + Склад клиента
         </button>
       </div>
@@ -263,6 +267,71 @@ export default function SettingsMarketplaceWarehouses() {
           </tbody>
         </table>
       </div>
+
+      {clientModalOpen && (
+        <div className="modal-shell" role="dialog" aria-modal="true">
+          <div className="modal-backdrop" onClick={() => setClientModalOpen(false)} />
+          <div className="modal-window" style={{ width: 520 }}>
+            <div className="modal-header">
+              <div className="modal-title">Склад клиента</div>
+              <button className="act act--ghost" onClick={() => setClientModalOpen(false)}>✕</button>
+            </div>
+
+            <form
+              className="modal-body-viewport"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!clientName.trim()) return;
+                addClientWarehouse();
+              }}
+            >
+              <div className="modal-body-content">
+                <div className="form-grid-2">
+                  <div className="form-span-2">
+                    <div className="form-label">Название склада</div>
+                    <input
+                      className="form-control w-full"
+                      value={clientName}
+                      onChange={(e) => setClientName(e.target.value)}
+                      placeholder="Например: Москва — Центр"
+                      autoFocus
+                    />
+                  </div>
+                  <div>
+                    <div className="form-label">Регион / город</div>
+                    <input
+                      className="form-control w-full"
+                      value={clientRegion}
+                      onChange={(e) => setClientRegion(e.target.value)}
+                      placeholder="Москва"
+                    />
+                  </div>
+                  <div>
+                    <div className="form-label">Адрес</div>
+                    <input
+                      className="form-control w-full"
+                      value={clientAddress}
+                      onChange={(e) => setClientAddress(e.target.value)}
+                      placeholder="ул. Тверская, 1"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="modal-footer">
+                <div className="flex items-center justify-end gap-2 w-full">
+                  <button type="button" className="mrp-btn" onClick={() => setClientModalOpen(false)}>
+                    Отмена
+                  </button>
+                  <button type="submit" className="mrp-btn mrp-btn--primary" disabled={!clientName.trim()}>
+                    Добавить
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

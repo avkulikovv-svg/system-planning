@@ -267,12 +267,6 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
               {(draft.productCode || "").trim()} {draft.productCode ? "— " : ""}{draft.productName || "Без наименования"}
             </div>
           </div>
-          <div className="modal-actions">
-            <button className="app-pill app-pill--md" onClick={onClose}>Отмена</button>
-            <button className="app-pill app-pill--md is-active" onClick={save} disabled={saving}>
-              {saving ? "Сохраняем…" : "Сохранить"}
-            </button>
-          </div>
         </div>
 
         <div className="modal-body-viewport" style={{ maxHeight: "78vh" }}>
@@ -418,8 +412,18 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
           </div>
 
           <div className="mt-2 flex gap-2">
-            <button type="button" className="app-pill app-pill--sm" onClick={() => addLine("mat")}>+ Материал</button>
-            <button type="button" className="app-pill app-pill--sm" onClick={() => addLine("semi")}>+ Полуфабрикат</button>          </div>
+            <button type="button" className="mrp-btn mrp-btn--ghost mrp-btn--xs" onClick={() => addLine("mat")}>+ Материал</button>
+            <button type="button" className="mrp-btn mrp-btn--ghost mrp-btn--xs" onClick={() => addLine("semi")}>+ Полуфабрикат</button>
+          </div>
+        </div>
+
+        <div className="modal-footer">
+          <div className="flex items-center justify-end gap-2 w-full">
+            <button className="mrp-btn" onClick={onClose}>Отмена</button>
+            <button className="mrp-btn mrp-btn--primary" onClick={save} disabled={saving}>
+              {saving ? "Сохраняем…" : "Сохранить"}
+            </button>
+          </div>
         </div>
       </div>
     </div>

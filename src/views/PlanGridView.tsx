@@ -34,6 +34,7 @@ type Semi = {
   category?: string;
   uom?: string;
   price?: number;
+  leadDays?: number;
 };
 
 // Унифицированная строка спецификации + поддержка старого поля materialId
@@ -65,6 +66,33 @@ type StockBalance = {
 
 /* ========= Утилиты/хуки ========= */
 const uid = () => Math.random().toString(36).slice(2, 9);
+const normalizeISO = (value?: string | null) => (value ? String(value).slice(0, 10) : "");
+const EKAT_TZ = "Asia/Yekaterinburg";
+const toEkatISO = (d: Date = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: EKAT_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const map = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+  return `${map.year}-${map.month}-${map.day}`;
+};
+const parseISODate = (iso: string) => {
+  const [y, m, d] = iso.split("-").map(Number);
+  return { y, m, d };
+};
+const isoToUtcDate = (iso: string) => {
+  const { y, m, d } = parseISODate(iso);
+  return new Date(Date.UTC(y, m - 1, d));
+};
+const utcDateToISO = (d: Date) =>
+  `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+const addDaysISO = (iso: string, delta: number) => {
+  const d = isoToUtcDate(iso);
+  d.setUTCDate(d.getUTCDate() + delta);
+  return utcDateToISO(d);
+};
 
 function useLocalState<T>(key: string, initial: T) {
   const [state, setState] = React.useState<T>(() => {
@@ -83,15 +111,15 @@ function useLocalState<T>(key: string, initial: T) {
 
 // --- рабочие дни / просрочка ---
 const addWorkingDays = (iso: string, k: number) => {
-  let d = new Date(iso + "T00:00:00");
+  let cur = iso;
   let left = Math.abs(k);
   const dir = k >= 0 ? 1 : -1;
   while (left > 0) {
-    d.setDate(d.getDate() + dir);
-    const wd = d.getDay();
+    cur = addDaysISO(cur, dir);
+    const wd = isoToUtcDate(cur).getUTCDay();
     if (wd !== 0 && wd !== 6) left -= 1;
   }
-  return d.toISOString().slice(0, 10);
+  return cur;
 };
 const isOverduePlan = (planISO: string, todayISO: string) => {
   const graceEnd = addWorkingDays(planISO, 1);
@@ -117,6 +145,8 @@ export const PlanNumberCell = React.memo(function PlanNumberCell({
   commitOnly?: boolean; // для Факта: проверка/проведение только на коммите
 }) {
   const store = storeRef.current;
+  const [, force] = React.useState(0); // форсируем ререндер для отображения вводимых цифр
+
   const isActive = store.activeId === id;
 
   const display = isActive ? store.values[id] ?? "" : value === 0 || !Number.isFinite(value) ? "" : String(value);
@@ -127,6 +157,8 @@ export const PlanNumberCell = React.memo(function PlanNumberCell({
     const n = Number(s);
     if (Number.isFinite(n) && n >= 0) onChange(n);
   };
+
+  const bump = () => force((v) => v + 1);
 
   return (
     <input
@@ -140,37 +172,26 @@ export const PlanNumberCell = React.memo(function PlanNumberCell({
         store.activeId = id;
         store.values[id] = display;
         e.currentTarget.select();
+        bump();
       }}
-     onChange={(e) => {
-  const next = e.target.value;
-  store.values[id] = next;
-
-  // нормализуем
-  const s = next.replace(",", ".").trim();
-
-  // ⚡️ если пользователь очистил поле — сразу обнуляем значение в состоянии
-  if (s === "") {
-    onChange(0);
-    return;
-  }
-
-  // для "факта" не проводим во время набора
-  if (commitOnly) return;
-
-  // живое обновление при валидном числе
-  if (!isNaN(Number(s))) onChange(Number(s));
-}}
+      onChange={(e) => {
+        // только сохраняем ввод в store и перерисовываемся, без живого коммита
+        store.values[id] = e.target.value;
+        bump();
+      }}
 
       onBlur={(e) => {
         if (store.suppressBlurOnce) {    // уже коммитили по Enter/Tab — пропускаем второй коммит
           store.suppressBlurOnce = false;
           delete store.values[id];
           if (store.activeId === id) store.activeId = null;
+          bump();
           return;
         }
         commit(store.values[id] ?? display);
         delete store.values[id];
         if (store.activeId === id) store.activeId = null;
+        bump();
       }}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === "Tab") {
@@ -180,12 +201,14 @@ export const PlanNumberCell = React.memo(function PlanNumberCell({
           if (store.activeId === id) store.activeId = null;
           (e.currentTarget as HTMLInputElement).blur();
           if (e.key === "Enter") e.preventDefault();
+          bump();
           return;
         }
         if (e.key === "Escape") {
           delete store.values[id];
           if (store.activeId === id) store.activeId = null;
           (e.currentTarget as HTMLInputElement).blur();
+          bump();
           return;
         }
         if (onNav && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")) {
@@ -206,9 +229,11 @@ function PlanGridView() {
   const [semis, setSemis] = React.useState<Semi[]>([]);
   const [specs, setSpecs] = React.useState<Spec[]>([]);
   const [materialsDict, setMaterialsDict] = React.useState<{ id: string; code: string; name: string; uom?: string }[]>([]);
-  const [semisDict, setSemisDict] = React.useState<{ id: string; code: string; name: string; uom?: string }[]>([]);
+  const [semisDict, setSemisDict] = React.useState<{ id: string; code: string; name: string; uom?: string; leadDays?: number }[]>([]);
   const [stockBalances, setStockBalances] = React.useState<StockBalance[]>([]);
-  const { warehouses, physical, zonesByPhys, findZoneByName } = useSupabaseWarehouses();
+  const [tgUsers, setTgUsers] = React.useState<{ id: string; label: string }[]>([]);
+  const [authorId, setAuthorId] = React.useState("");
+  const { warehouses, physical, zonesByPhys, findZoneByName, updateWarehouse } = useSupabaseWarehouses();
 
   React.useEffect(() => {
     const loadProducts = async () => {
@@ -239,7 +264,7 @@ function PlanGridView() {
     const loadSemis = async () => {
       const { data, error } = await supabase
         .from("items")
-        .select("id, code, name, category, uom, status")
+        .select("id, code, name, category, uom, status, lead_days")
         .eq("kind", "semi")
         .order("name", { ascending: true });
       if (error) {
@@ -254,12 +279,36 @@ function PlanGridView() {
           name: row.name,
           category: row.category ?? "",
           uom: row.uom ?? "шт",
+          leadDays: Number(row.lead_days) || 0,
         }));
       setSemis(mapped);
-      setSemisDict(mapped.map((s) => ({ id: s.id, code: s.code, name: s.name, uom: s.uom })));
+      setSemisDict(mapped.map((s) => ({ id: s.id, code: s.code, name: s.name, uom: s.uom, leadDays: s.leadDays })));
     };
     loadSemis();
   }, []);
+
+  React.useEffect(() => {
+    const loadTgUsers = async () => {
+      const { data, error } = await supabase
+        .from("tg_users")
+        .select("id, username, first_name, last_name, status")
+        .in("status", ["active"]);
+      if (error) {
+        console.error("load tg_users", error);
+        return;
+      }
+      const mapped = (data || []).map((row: any) => {
+        const name = [row.first_name, row.last_name].filter(Boolean).join(" ").trim();
+        const label = name || (row.username ? `@${row.username}` : "—");
+        return { id: row.id, label };
+      });
+      setTgUsers(mapped);
+      if (!authorId && mapped.length) {
+        setAuthorId(mapped[0].id);
+      }
+    };
+    loadTgUsers();
+  }, [authorId]);
 
   React.useEffect(() => {
     const loadMaterials = async () => {
@@ -356,6 +405,10 @@ function PlanGridView() {
   const matMap  = React.useMemo(() => Object.fromEntries(materialsDict.map(m => [m.id, m])), [materialsDict]);
   const semiMap = React.useMemo(() => Object.fromEntries(semisDict.map(s => [s.id, s])), [semisDict]);
   const nameOf = (kind: "mat" | "semi", id: string) => (kind === "mat" ? matMap[id]?.name : semiMap[id]?.name) || id;
+  const fmtShort = React.useCallback((iso: string) => {
+    const { m, d } = parseISODate(iso);
+    return `${String(d).padStart(2, "0")}.${String(m).padStart(2, "0")}`;
+  }, []);
 
   // парс/сбор id ячеек
   const parseCellId = (cid: string) => {
@@ -372,17 +425,15 @@ function PlanGridView() {
   };
 
   // next id по направлению
-  const [startISO, setStartISO] = useLocalState<string>("mrp.plan.startISO", new Date().toISOString().slice(0, 10));
+  const [startISO, setStartISO] = useLocalState<string>("mrp.plan.startISO", toEkatISO(new Date()));
   const [days, setDays]         = useLocalState<number>("mrp.plan.days", 14);
   const [rtl, setRtl]           = useLocalState<boolean>("mrp.plan.rtl", true);
 
   const range = React.useMemo(() => {
-    const base = new Date(startISO + "T00:00:00");
+    const baseISO = normalizeISO(startISO);
     const list: string[] = [];
     for (let i = 0; i < days; i++) {
-      const d = new Date(base);
-      d.setDate(d.getDate() + i);
-      list.push(d.toISOString().slice(0, 10));
+      list.push(addDaysISO(baseISO, i));
     }
     return rtl ? list.reverse() : list;
   }, [startISO, days, rtl]);
@@ -402,7 +453,7 @@ function PlanGridView() {
     if (to) focusCell(to);
   };
 
-  const todayISO = new Date().toISOString().slice(0, 10);
+  const todayISO = toEkatISO(new Date());
   const editStoreRef = React.useRef<EditStore>({ activeId: null, values: {} });
 
   // режим: ГП или ПФ
@@ -411,6 +462,21 @@ function PlanGridView() {
   // склад
   const physDefault = React.useMemo(() => physical[0]?.id ?? "", [physical]);
   const [physId, setPhysId] = useLocalState<string>("mrp.plan.phys", physDefault);
+  const physTarget = physId || physDefault;
+  const activePhys = React.useMemo(() => physical.find((p) => p.id === physTarget) || null, [physical, physTarget]);
+  const [sendTime, setSendTime] = useLocalState<string>("mrp.plan.send_time", "07:45");
+
+  // если список складов обновился и сохранённый id отсутствует — переключаемся на первый доступный
+  React.useEffect(() => {
+    if (physTarget) return;
+    if (physDefault) setPhysId(physDefault);
+  }, [physTarget, physDefault, setPhysId]);
+  React.useEffect(() => {
+    if (!activePhys) return;
+    if (activePhys.tgSendTime && activePhys.tgSendTime !== sendTime) {
+      setSendTime(activePhys.tgSendTime);
+    }
+  }, [activePhys, sendTime, setSendTime]);
 
   // --- ЗОНЫ (без UI): определяются автоматически по выбранному складу ---
   const fgZoneIdForPhys = React.useMemo(() => {
@@ -442,12 +508,14 @@ function PlanGridView() {
     );
   }, [physId, physDefault, zonesByPhys, findZoneByName]);
 
-  // планы/факты
+  // планы/факты/брак
   type PlanMap = Record<string, Record<string, number>>;
   const [planMapFG, setPlanMapFG] = React.useState<PlanMap>({});
   const [factMapFG, setFactMapFG] = React.useState<PlanMap>({});
+  const [scrapMapFG, setScrapMapFG] = React.useState<PlanMap>({});
   const [planMapSEMI, setPlanMapSEMI] = React.useState<PlanMap>({});
   const [factMapSEMI, setFactMapSEMI] = React.useState<PlanMap>({});
+  const [scrapMapSEMI, setScrapMapSEMI] = React.useState<PlanMap>({});
 
   const updatePlanLocal = React.useCallback((kind: "fg" | "semi", id: string, dateISO: string, val: number) => {
     if (kind === "fg") {
@@ -465,9 +533,17 @@ function PlanGridView() {
     }
   }, []);
 
+  const updateScrapLocal = React.useCallback((kind: "fg" | "semi", id: string, dateISO: string, val: number) => {
+    if (kind === "fg") {
+      setScrapMapFG((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), [dateISO]: val } }));
+    } else {
+      setScrapMapSEMI((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), [dateISO]: val } }));
+    }
+  }, []);
+
   const fetchPlans = React.useCallback(
     async (targetScope: "fg" | "semi") => {
-      if (!range.length) return;
+      if (!range.length || !physTarget) return;
       const ordered = [...range].sort();
       const startDate = ordered[0];
       const endDate = ordered[ordered.length - 1];
@@ -475,33 +551,39 @@ function PlanGridView() {
       const idColumn = targetScope === "fg" ? "product_id" : "semi_id";
       const { data, error } = await supabase
         .from(table)
-        .select(`${idColumn}, date_iso, qty, fact_qty`)
+        .select(`${idColumn}, phys_warehouse_id, date_iso, qty, fact_qty, scrap_qty`)
         .gte("date_iso", startDate)
-        .lte("date_iso", endDate);
+        .lte("date_iso", endDate)
+        .eq("phys_warehouse_id", physTarget);
       if (error) {
         console.error("load plans", error);
         return;
       }
       const nextPlan: PlanMap = {};
       const nextFact: PlanMap = {};
+      const nextScrap: PlanMap = {};
       (data || []).forEach((row: any) => {
         const itemId = row[idColumn];
-        const dateISO = row.date_iso;
+        const dateISO = normalizeISO(row.date_iso);
         if (!itemId || !dateISO) return;
         if (!nextPlan[itemId]) nextPlan[itemId] = {};
         if (!nextFact[itemId]) nextFact[itemId] = {};
+        if (!nextScrap[itemId]) nextScrap[itemId] = {};
         nextPlan[itemId][dateISO] = Number(row.qty) || 0;
         nextFact[itemId][dateISO] = Number(row.fact_qty) || 0;
+        nextScrap[itemId][dateISO] = Number(row.scrap_qty) || 0;
       });
       if (targetScope === "fg") {
         setPlanMapFG(nextPlan);
         setFactMapFG(nextFact);
+        setScrapMapFG(nextScrap);
       } else {
         setPlanMapSEMI(nextPlan);
         setFactMapSEMI(nextFact);
+        setScrapMapSEMI(nextScrap);
       }
     },
-    [range]
+    [range, physTarget]
   );
 
   React.useEffect(() => {
@@ -509,14 +591,14 @@ function PlanGridView() {
   }, [fetchPlans, scope]);
 
   const upsertPlanValue = React.useCallback(
-    async (kind: "fg" | "semi", itemId: string, dateISO: string, qty: number) => {
+    async (kind: "fg" | "semi", itemId: string, dateISO: string, qty: number, physWarehouseId: string) => {
       const table = kind === "fg" ? "plans_fg" : "plans_semi";
       const idColumn = kind === "fg" ? "product_id" : "semi_id";
-      const payload: Record<string, any> = { [idColumn]: itemId, date_iso: dateISO, qty };
-      const { error } = await supabase.from(table).upsert(payload);
+      const payload: Record<string, any> = { [idColumn]: itemId, date_iso: dateISO, qty, phys_warehouse_id: physWarehouseId };
+      const { error } = await supabase.from(table).upsert(payload, { onConflict: `${idColumn},phys_warehouse_id,date_iso` });
       if (error) {
-        console.error("plan upsert", error);
-        alert("Не удалось сохранить план. См. консоль.");
+        console.error("plan upsert", { payload, error });
+        alert(`Не удалось сохранить план: ${error.message || "ошибка Supabase"}`);
         fetchPlans(kind);
       }
     },
@@ -525,10 +607,70 @@ function PlanGridView() {
 
   const planMap = scope === "fg" ? planMapFG : planMapSEMI;
   const factMap = scope === "fg" ? factMapFG : factMapSEMI;
+  const scrapMap = scope === "fg" ? scrapMapFG : scrapMapSEMI;
 
   const handlePlanChange = (id: string, dateISO: string, val: number) => {
+    if (!physTarget) {
+      alert("Не выбран склад.");
+      return;
+    }
+
+    // Если планируем готовую продукцию с полуфабрикатами — проверяем остатки ПФ и предлагаем перенести
+    if (scope === "fg" && val > 0) {
+      const per = perUnitById[id];
+      const semiNeed = per?.semi ?? {};
+      const semiIds = Object.keys(semiNeed);
+      if (semiIds.length > 0) {
+        if (!semiZoneIdForPhys) {
+          alert("Не выбрана зона полуфабрикатов для расчёта обеспечения.");
+          return;
+        }
+        const shortages = semiIds
+          .map((sid) => {
+            const one = Number(semiNeed[sid] || 0);
+            const need = one * val;
+            const have = getQty("semi", sid, semiZoneIdForPhys);
+            const deficit = Math.max(0, need - have);
+            return { sid, one, need, have, deficit, lead: Number(semiMap[sid]?.leadDays ?? 0) };
+          })
+          .filter((x) => x.deficit > 0);
+
+        if (shortages.length > 0) {
+          const maxLead = Math.max(...shortages.map((s) => s.lead || 0));
+          const suggestDate = maxLead > 0 ? addWorkingDays(dateISO, maxLead) : dateISO;
+          const lines = [
+            "Не хватает полуфабрикатов:",
+            ...shortages.map(
+              (s) =>
+                `• ${nameOf("semi", s.sid)}: нужно ${s.need}, есть ${s.have}` +
+                (s.lead > 0 ? ` (срок ${s.lead} дн.)` : "")
+            ),
+            "",
+            `Предлагаю запланировать выпуск ПФ на ${dateISO} и перенести выпуск товара на ${suggestDate}.`,
+          ];
+          const ok = window.confirm(lines.join("\n"));
+          if (!ok) {
+            // пользователь отказался — ставим план как есть
+          } else {
+            // 1) Обнуляем текущую ячейку
+            updatePlanLocal(scope, id, dateISO, 0);
+            upsertPlanValue(scope, id, dateISO, 0, physTarget);
+            // 2) Ставим план ГП на предложенную дату
+            updatePlanLocal(scope, id, suggestDate, val);
+            upsertPlanValue(scope, id, suggestDate, val, physTarget);
+            // 3) Ставим планы ПФ на исходную дату на размер дефицита
+            shortages.forEach((s) => {
+              updatePlanLocal("semi", s.sid, dateISO, s.deficit);
+              upsertPlanValue("semi", s.sid, dateISO, s.deficit, physTarget);
+            });
+            return;
+          }
+        }
+      }
+    }
+
     updatePlanLocal(scope, id, dateISO, val);
-    upsertPlanValue(scope, id, dateISO, val);
+    upsertPlanValue(scope, id, dateISO, val, physTarget);
   };
 
   // список категорий
@@ -590,17 +732,18 @@ function PlanGridView() {
 
   // итоги
   const totals = React.useMemo(() => {
-    const res: Record<string, { plan: number; fact: number }> = {};
-    for (const d of range) res[d] = { plan: 0, fact: 0 };
+    const res: Record<string, { plan: number; fact: number; scrap: number }> = {};
+    for (const d of range) res[d] = { plan: 0, fact: 0, scrap: 0 };
     for (const r of rows) {
       const id = r.id!;
       for (const d of range) {
         res[d].plan += Number(planMap[id]?.[d] || 0);
         res[d].fact += Number(factMap[id]?.[d] || 0);
+        res[d].scrap += Number(scrapMap[id]?.[d] || 0);
       }
     }
     return res;
-  }, [rows, range, planMap, factMap]);
+  }, [rows, range, planMap, factMap, scrapMap]);
 
   // спецификация по item
   const specFor = (id: string | undefined, code: string | undefined) => {
@@ -651,7 +794,7 @@ function PlanGridView() {
   type CovCell = { ok: boolean; canMake: number; title: string };
   const coverage: Record<string, Record<string, CovCell>> = React.useMemo(() => {
     const res: Record<string, Record<string, CovCell>> = {};
-    if (!matZoneIdForPhys || !fgZoneIdForPhys || !semiZoneIdForPhys) return res;
+    if (!matZoneIdForPhys || !fgZoneIdForPhys) return res; // покажем ❌ в UI, если зона не выбрана
 
     const futureDays = range
       .filter((d) => d >= todayISO)
@@ -697,6 +840,11 @@ function PlanGridView() {
           continue;
         }
 
+        if (Object.keys(per.semi).length > 0 && !semiZoneIdForPhys) {
+          res[id][d] = { ok: false, canMake: 0, title: "Не выбрана зона полуфабрикатов." };
+          continue;
+        }
+
         let maxMake = Infinity;
 
         for (const [mid, one] of Object.entries(per.mat)) {
@@ -712,6 +860,7 @@ function PlanGridView() {
         if (!Number.isFinite(maxMake)) maxMake = 0;
 
         const lines: string[] = [];
+        const semiHints: string[] = [];
         lines.push(`Можно произвести: ${Math.max(0, Math.floor(maxMake))}`);
         for (const [mid, one] of Object.entries(per.mat)) {
           const need = one * plan, have = qtyMat(mid);
@@ -719,7 +868,27 @@ function PlanGridView() {
         }
         for (const [sid, one] of Object.entries(per.semi)) {
           const need = one * plan, have = qtySemi(sid);
-          if (have + 1e-8 < need) lines.push(`• ${nameOf("semi", sid)}: −${Math.round((need - have + 1e-9) * 1000) / 1000}`);
+          if (have + 1e-8 < need) {
+            const shortage = Math.round((need - have + 1e-9) * 1000) / 1000;
+            const leadDays = Number(semiMap[sid]?.leadDays ?? 0);
+            const eta = leadDays > 0 ? addWorkingDays(d, leadDays) : null;
+            const semiName = nameOf("semi", sid);
+
+            let line = `• ${semiName}: −${shortage}`;
+            if (leadDays > 0) line += ` (срок ${leadDays} дн.)`;
+            if (eta) line += ` → ГП с ${fmtShort(eta)}`;
+            lines.push(line);
+
+            if (eta) {
+              semiHints.push(`${semiName}: ГП ставим не раньше ${fmtShort(eta)}; запланируйте ПФ на ${fmtShort(eta)} (${eta})`);
+            } else {
+              semiHints.push(`${semiName}: нет остатка, добавьте план выпуска ПФ до ${fmtShort(d)}`);
+            }
+          }
+        }
+        if (semiHints.length) {
+          lines.push("Предложение по ПФ:");
+          semiHints.forEach((h) => lines.push(`• ${h}`));
         }
 
         const ok = plan <= maxMake;
@@ -734,10 +903,10 @@ function PlanGridView() {
 
     return res;
   }, [
-    rows, range, todayISO, planMap, factMap,
+    rows, range, todayISO, planMap, factMap, scrapMap,
     perUnitById, specExistsById,
     matZoneIdForPhys, fgZoneIdForPhys, semiZoneIdForPhys,
-    getQty,
+    getQty, fmtShort, semiMap,
   ]);
 
   const checkProductionDelta = React.useCallback(
@@ -775,44 +944,59 @@ function PlanGridView() {
   const handleFactChange = async (id: string, dateISO: string, nextVal: number, code: string) => {
     const prev = Number(factMap[id]?.[dateISO] || 0);
     const diff = nextVal - prev;
+    if (!authorId) {
+      alert("Выберите автора отчёта.");
+      return;
+    }
     const per = perUnitById[id];
     const hasSpec = !!specExistsById[id] && per && (Object.keys(per.mat).length > 0 || Object.keys(per.semi).length > 0);
     if (!hasSpec) {
       alert("Нельзя провести факт: для позиции нет корректной спецификации.");
       return;
     }
-    if (diff < 0) {
-      alert("Чтобы уменьшить факт, отмените соответствующий отчёт о производстве.");
-      return;
-    }
     if (diff === 0) return;
 
-    const { ok, msg } = checkProductionDelta(id, diff);
-    if (!ok) {
-      if (msg) alert(msg);
-      return;
+    if (diff > 0) {
+      const { ok, msg } = checkProductionDelta(id, diff);
+      if (!ok) {
+        if (msg) alert(msg);
+        return;
+      }
     }
 
     const fgZone = scope === "fg" ? fgZoneIdForPhys : semiZoneIdForPhys;
-    const physTarget = physId || physDefault;
     if (!fgZone || !matZoneIdForPhys || !physTarget) {
       alert("Не выбран склад или зоны для проведения производства.");
       return;
     }
 
     try {
-      const { error } = await supabase.rpc("post_production_report", {
-        p_number: `${scope === "fg" ? "FG" : "SEMI"}-${code || "NO"}-${dateISO}`,
-        p_date_iso: dateISO,
-        p_product_id: id,
-        p_qty: diff,
-        p_phys_warehouse_id: physTarget,
-        p_fg_zone_id: fgZone,
-        p_mat_zone_id: matZoneIdForPhys,
-        p_plan_kind: scope,
-        p_plan_item_id: id,
-        p_plan_date: dateISO,
-      });
+      const { error } = diff > 0
+        ? await supabase.rpc("post_production_report", {
+            p_number: `${scope === "fg" ? "FG" : "SEMI"}-${code || "NO"}-${dateISO}`,
+            p_date_iso: dateISO,
+            p_product_id: id,
+            p_qty: diff,
+            p_phys_warehouse_id: physTarget,
+            p_fg_zone_id: fgZone,
+            p_mat_zone_id: matZoneIdForPhys,
+            p_plan_kind: scope,
+            p_plan_item_id: id,
+            p_plan_date: dateISO,
+            p_actor_id: authorId,
+          })
+        : await supabase.rpc("adjust_production_report", {
+            p_delta_qty: diff,
+            p_product_id: id,
+            p_phys_warehouse_id: physTarget,
+            p_fg_zone_id: fgZone,
+            p_mat_zone_id: matZoneIdForPhys,
+            p_plan_kind: scope,
+            p_plan_item_id: id,
+            p_plan_date: dateISO,
+            p_reason: "Корректировка факта из план-факта",
+            p_actor_id: authorId,
+          });
       if (error) throw error;
       updateFactLocal(scope, id, dateISO, nextVal);
       await fetchPlans(scope);
@@ -823,26 +1007,123 @@ function PlanGridView() {
     }
   };
 
+  const handleScrapChange = async (id: string, dateISO: string, nextVal: number, code: string) => {
+    const prev = Number(scrapMap[id]?.[dateISO] || 0);
+    const diff = nextVal - prev;
+    if (!authorId) {
+      alert("Выберите автора отчёта.");
+      return;
+    }
+    const per = perUnitById[id];
+    const hasSpec = !!specExistsById[id] && per && (Object.keys(per.mat).length > 0 || Object.keys(per.semi).length > 0);
+    if (!hasSpec) {
+      alert("Нельзя провести брак: для позиции нет корректной спецификации.");
+      return;
+    }
+    if (diff === 0) return;
+    if (!matZoneIdForPhys || !physTarget) {
+      alert("Не выбран склад или зона материалов.");
+      return;
+    }
+
+    try {
+      const { error } = diff > 0
+        ? await supabase.rpc("post_production_scrap", {
+            p_number: `SCR-${scope === "fg" ? "FG" : "SEMI"}-${code || "NO"}-${dateISO}`,
+            p_date_iso: dateISO,
+            p_item_id: id,
+            p_qty: diff,
+            p_phys_warehouse_id: physTarget,
+            p_mat_zone_id: matZoneIdForPhys,
+            p_semi_zone_id: scope === "semi" ? semiZoneIdForPhys : null,
+            p_plan_kind: scope,
+            p_plan_item_id: id,
+            p_plan_date: dateISO,
+            p_actor_id: authorId,
+          })
+        : await supabase.rpc("adjust_production_scrap", {
+            p_delta_qty: diff,
+            p_item_id: id,
+            p_phys_warehouse_id: physTarget,
+            p_mat_zone_id: matZoneIdForPhys,
+            p_semi_zone_id: scope === "semi" ? semiZoneIdForPhys : null,
+            p_plan_kind: scope,
+            p_plan_item_id: id,
+            p_plan_date: dateISO,
+            p_reason: "Корректировка брака из план-факта",
+            p_actor_id: authorId,
+          });
+      if (error) throw error;
+
+      if (diff > 0) {
+        const table = scope === "fg" ? "plans_fg" : "plans_semi";
+        const idColumn = scope === "fg" ? "product_id" : "semi_id";
+        const payload: Record<string, any> = {
+          [idColumn]: id,
+          date_iso: dateISO,
+          phys_warehouse_id: physTarget,
+          scrap_qty: nextVal,
+        };
+        await supabase.from(table).upsert(payload, { onConflict: `${idColumn},phys_warehouse_id,date_iso` });
+      }
+
+      updateScrapLocal(scope, id, dateISO, nextVal);
+      await fetchPlans(scope);
+      await refreshStockBalances();
+    } catch (err: any) {
+      console.error("post_production_scrap", err);
+      alert("Не удалось провести брак через Supabase RPC, см. консоль.");
+    }
+  };
+
+  const handleSaveSendTime = async () => {
+    if (!physTarget) return;
+    try {
+      await updateWarehouse(physTarget, { tgSendTime: sendTime || null });
+    } catch (err) {
+      console.error("save tg send time", err);
+    }
+  };
+
+  const handleSendPlan = async () => {
+    if (!physTarget) {
+      alert("Не выбран склад.");
+      return;
+    }
+    try {
+      const { error } = await supabase.functions.invoke("tg-send-plan", {
+        body: {
+          physWarehouseId: physTarget,
+          dateISO: todayISO,
+        },
+      });
+      if (error) throw error;
+      alert("План отправлен в Telegram.");
+    } catch (err: any) {
+      console.error("tg-send-plan", err);
+      alert("Не удалось отправить план в Telegram.");
+    }
+  };
+
 
   // управление диапазоном
   const addLeft = (n: number) => {
-    const d = new Date(startISO + "T00:00:00");
-    d.setDate(d.getDate() - n);
-    setStartISO(d.toISOString().slice(0, 10));
+    const baseISO = normalizeISO(startISO);
+    setStartISO(addDaysISO(baseISO, -n));
     setDays(days + n);
   };
   const addRight = (n: number) => setDays(Math.min(90, days + n));
   const removeRight = (n: number) => setDays(Math.max(1, days - n));
 
   const fmt = (iso: string) => {
-    const d = new Date(iso + "T00:00:00");
-    return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const { m, d } = parseISODate(iso);
+    return `${String(d).padStart(2, "0")}.${String(m).padStart(2, "0")}`;
   };
-  const weekday = (iso: string) => ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"][new Date(iso + "T00:00:00").getDay()];
+  const weekday = (iso: string) => ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"][isoToUtcDate(iso).getUTCDay()];
   const dayMeta = (iso: string) => {
-    const g = new Date(iso + "T00:00:00").getDay();
+    const g = isoToUtcDate(iso).getUTCDay();
     const isWeekend = g === 0 || g === 6;
-    const isToday = iso === new Date().toISOString().slice(0, 10);
+    const isToday = iso === todayISO;
     return { isWeekend, isToday };
   };
 
@@ -859,7 +1140,7 @@ function PlanGridView() {
                   type="date"
                   className="mrp-input"
                   value={startISO}
-                  onChange={(e) => setStartISO(e.target.value)}
+                  onChange={(e) => setStartISO(normalizeISO(e.target.value))}
                 />
                 <input
                   type="number"
@@ -918,6 +1199,34 @@ function PlanGridView() {
             </div>
 
             <div className="mrp-field">
+              <span className="mrp-field__label">Отправка TG</span>
+              <div className="row-inline">
+                <input
+                  type="time"
+                  className="mrp-input num-compact"
+                  value={sendTime}
+                  onChange={(e) => setSendTime(e.target.value)}
+                />
+                <button type="button" className="mrp-btn mrp-btn--ghost" onClick={handleSaveSendTime}>
+                  Сохранить
+                </button>
+                <button type="button" className="mrp-btn mrp-btn--primary" onClick={handleSendPlan}>
+                  Отправить план
+                </button>
+              </div>
+            </div>
+
+            <div className="mrp-field">
+              <span className="mrp-field__label">Автор</span>
+              <select className="mrp-select" value={authorId} onChange={(e) => setAuthorId(e.target.value)}>
+                <option value="">— выбрать —</option>
+                {tgUsers.map((u) => (
+                  <option key={u.id} value={u.id}>{u.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="mrp-field">
               <span className="mrp-field__label">Категория</span>
               <select className="mrp-select" value={catFilter} onChange={(e) => setCatFilter(e.target.value)}>
                 <option value="">(все категории)</option>
@@ -932,6 +1241,15 @@ function PlanGridView() {
         {/* таблица */}
         <div className="mrp-hscroll">
           <table className="mrp-table text-sm table-compact plangrid">
+            <colgroup>
+              <col style={{ width: "var(--code-w)" }} />
+              <col style={{ width: "var(--name-w)" }} />
+              <col style={{ width: "var(--fg-w)" }} />
+              <col style={{ width: "var(--metric-w)" }} />
+              {range.map((d) => (
+                <col key={d} style={{ width: "var(--date-w)" }} />
+              ))}
+            </colgroup>
             <thead>
               <tr>
                 <th
@@ -956,7 +1274,7 @@ function PlanGridView() {
                 </th>
 
                 {range.map((d) => {
-                  const g = new Date(d + "T00:00:00").getDay();
+                  const g = isoToUtcDate(d).getUTCDay();
                   const isWeekend = g === 0 || g === 6;
                   const isToday = d === todayISO;
                   return (
@@ -976,13 +1294,13 @@ function PlanGridView() {
 
                 const PlanRow = (
                   <tr key={`${id}-plan`} className="border-t border-slate-200">
-                    <td className="sticky code-col align-top px-2 py-[6px]" rowSpan={3} style={{ left: 0, background: "#fff" }}>
+                    <td className="sticky code-col align-top px-2 py-[6px]" rowSpan={4} style={{ left: 0, background: "#fff" }}>
                       <span className="mrp-code">{code || "—"}</span>
                     </td>
-                    <td className="sticky name-col align-top px-2 py-[6px]" rowSpan={3} style={{ left: "var(--code-w)", background: "#fff" }}>
-                      <span className="text-slate-700 text-sm leading-snug line-clamp-2">{item.name}</span>
+                    <td className="sticky name-col align-top px-2 py-[6px]" rowSpan={4} style={{ left: "var(--code-w)", background: "#fff" }}>
+                      <span className="plangrid-name text-slate-700 text-sm leading-snug">{item.name}</span>
                     </td>
-                    <td className="sticky fg-col align-top px-2 py-[6px]" rowSpan={3} style={{ left: "calc(var(--code-w) + var(--name-w))", background: "#fff" }}>
+                    <td className="sticky fg-col align-top px-2 py-[6px]" rowSpan={4} style={{ left: "calc(var(--code-w) + var(--name-w))", background: "#fff" }}>
                       {stockOfRow(id)}
                     </td>
                     <td className="sticky metric-col px-2 py-[6px]" style={{ left: "calc(var(--code-w) + var(--name-w) + var(--fg-w))", background: "#fff" }}>
@@ -1035,6 +1353,29 @@ function PlanGridView() {
                   </tr>
                 );
 
+                const ScrapRow = (
+                  <tr key={`${id}-scrap`} className="border-t border-slate-100">
+                    <td className="sticky metric-col px-2 py-[6px]" style={{ left: "calc(var(--code-w) + var(--name-w) + var(--fg-w))", background: "#fff" }}>
+                      Брак
+                    </td>
+                    {range.map((d) => {
+                      const scrapVal = Number(scrapMap[id]?.[d] || 0);
+                      return (
+                        <td key={d} className="date-col px-2 py-[6px]">
+                          <PlanNumberCell
+                            id={`${id}:${d}:scrap`}
+                            value={scrapVal}
+                            onChange={(n) => handleScrapChange(id, d, n, code)}
+                            storeRef={editStoreRef}
+                            onNav={handleNav}
+                            commitOnly
+                          />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+
                 const CoverRow = (
                   <tr key={`${id}-cover`} className="border-t border-slate-100">
                     <td className="sticky metric-col px-2 py-[6px]" style={{ left: "calc(var(--code-w) + var(--name-w) + var(--fg-w))", background: "#fff" }}>
@@ -1045,8 +1386,8 @@ function PlanGridView() {
                       if (d < todayISO || planVal <= 0) return <td key={d} className="date-col text-center px-2 py-[6px]"></td>;
 
                       const cell = coverage[id]?.[d];
-                      const ok   = cell?.ok ?? true;
-                      const t    = cell?.title ?? "";
+                      const ok   = cell?.ok ?? false;
+                      const t    = cell?.title ?? "Нет данных по обеспеченности (не выбрана зона материалов/ПФ или нет спецификации)";
 
                       return (
                         <td key={d} className="date-col text-center px-2 py-[6px]">
@@ -1066,6 +1407,7 @@ function PlanGridView() {
                   <React.Fragment key={id}>
                     {PlanRow}
                     {FactRow}
+                    {ScrapRow}
                     {CoverRow}
                   </React.Fragment>
                 );
@@ -1090,8 +1432,9 @@ function PlanGridView() {
                 <td className="metric-col px-2 py-2" style={{ left: "calc(var(--code-w) + var(--name-w) + var(--fg-w))", background: "#fff" }}></td>
                 {range.map((d) => (
                   <td key={d} className="date-col px-2 py-2">
-                    <div className="text-sm font-semibold">{totals[d].plan}</div>
-                    <div className="text-sm text-slate-600">{totals[d].fact}</div>
+                  <div className="text-sm font-semibold">{totals[d].plan}</div>
+                  <div className="text-sm text-slate-600">{totals[d].fact}</div>
+                  <div className="text-xs text-slate-400">Брак: {totals[d].scrap}</div>
                   </td>
                 ))}
               </tr>

@@ -311,6 +311,8 @@ export type WarehouseRecord = {
   type: "physical" | "virtual";
   parentId: string | null;
   legacyId: string | null;
+  tgChatId: string | null;
+  tgSendTime: string | null;
   isActive: boolean;
 };
 
@@ -320,6 +322,8 @@ const mapWarehouseRow = (row: any): WarehouseRecord => ({
   type: row.type === "virtual" ? "virtual" : "physical",
   parentId: row.parent_id ?? null,
   legacyId: row.legacy_id ?? null,
+  tgChatId: row.tg_chat_id ?? null,
+  tgSendTime: row.tg_send_time ?? null,
   isActive: row.is_active ?? true,
 });
 
@@ -332,7 +336,7 @@ export function useSupabaseWarehouses() {
     try {
       const { data, error } = await supabase
         .from("warehouses")
-        .select("id, name, type, parent_id, legacy_id, is_active")
+        .select("id, name, type, parent_id, legacy_id, tg_chat_id, tg_send_time, is_active")
         .order("name", { ascending: true });
       if (error) throw error;
       setWarehouses((data || []).map(mapWarehouseRow));
@@ -360,7 +364,7 @@ export function useSupabaseWarehouses() {
             parent_id: payload.parentId ?? null,
             legacy_id: payload.legacyId ?? null,
           })
-          .select("id, name, type, parent_id, legacy_id, is_active")
+          .select("id, name, type, parent_id, legacy_id, tg_chat_id, tg_send_time, is_active")
           .single();
         if (error) throw error;
         const rec = mapWarehouseRow(data);
@@ -376,18 +380,30 @@ export function useSupabaseWarehouses() {
   );
 
   const updateWarehouse = useCallback(
-    async (id: string, patch: Partial<{ name: string; parentId: string | null; isActive: boolean; legacyId: string | null }>) => {
+    async (
+      id: string,
+      patch: Partial<{
+        name: string;
+        parentId: string | null;
+        isActive: boolean;
+        legacyId: string | null;
+        tgChatId: string | null;
+        tgSendTime: string | null;
+      }>,
+    ) => {
       const updates: Record<string, any> = {};
       if (patch.name !== undefined) updates.name = patch.name.trim();
       if (patch.parentId !== undefined) updates.parent_id = patch.parentId;
       if (patch.isActive !== undefined) updates.is_active = patch.isActive;
       if (patch.legacyId !== undefined) updates.legacy_id = patch.legacyId;
+      if (patch.tgChatId !== undefined) updates.tg_chat_id = patch.tgChatId;
+      if (patch.tgSendTime !== undefined) updates.tg_send_time = patch.tgSendTime;
       try {
         const { data, error } = await supabase
           .from("warehouses")
           .update(updates)
           .eq("id", id)
-          .select("id, name, type, parent_id, legacy_id, is_active")
+          .select("id, name, type, parent_id, legacy_id, tg_chat_id, tg_send_time, is_active")
           .single();
         if (error) throw error;
         const rec = mapWarehouseRow(data);
@@ -458,6 +474,7 @@ export function useSupabaseWarehouses() {
     addPhysical,
     addZone,
     renameWarehouse,
+    updateWarehouse,
     deleteWarehouse,
     setWarehouseActive,
   };

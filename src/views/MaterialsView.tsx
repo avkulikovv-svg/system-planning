@@ -297,7 +297,7 @@ function MaterialForm({
             {isSemi && onRequestOpenSpec && (
               <button
                 type="button"
-                className="app-pill app-pill--sm"
+                className="mrp-btn mrp-btn--ghost mrp-btn--xs"
                 title="Открыть спецификацию"
                 onClick={() => onRequestOpenSpec(form)}
               >
@@ -457,12 +457,12 @@ function MaterialForm({
       <div className="mt-3 flex items-center justify-end gap-2">
         <button
           type="button"
-          className="app-pill app-pill--md"
+          className="mrp-btn"
           onClick={onCancel}
         >
           Отмена
         </button>
-        <button type="submit" className="app-pill app-pill--md is-active">
+        <button type="submit" className="mrp-btn mrp-btn--primary">
           Сохранить
         </button>
       </div>

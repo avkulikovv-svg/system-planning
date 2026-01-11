@@ -70,6 +70,8 @@ type Product = {
   boxLength?: number;
   boxWidth?: number;
   boxHeight?: number;
+  boxVolume?: number;
+  unitWeight?: number;
   boxWeight?: number;
   unitsPerBox?: number;
   unitsPerPallet?: number;
@@ -331,13 +333,74 @@ function Modal({ onClose, title, icon, width, z = 0, children }: ModalProps) {
   );
 }
 
+type InputModalProps = {
+  open: boolean;
+  title: string;
+  label: string;
+  placeholder?: string;
+  value: string;
+  onChange: (val: string) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+  submitLabel?: string;
+};
+
+function InputModal({
+  open,
+  title,
+  label,
+  placeholder,
+  value,
+  onChange,
+  onClose,
+  onSubmit,
+  submitLabel = "Сохранить",
+}: InputModalProps) {
+  if (!open) return null;
+  const canSave = value.trim().length > 0;
+
+  return (
+    <Modal onClose={onClose} title={title} width={420}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!canSave) return;
+          onSubmit();
+        }}
+      >
+        <div className="form-row">
+          <Label>{label}</Label>
+          <input
+            className="form-control w-full"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder}
+            autoFocus
+          />
+        </div>
+
+        <div className="modal-footer">
+          <div className="flex items-center justify-end gap-2 w-full">
+            <button type="button" className="mrp-btn" onClick={onClose}>
+              Отмена
+            </button>
+            <button type="submit" className="mrp-btn mrp-btn--primary" disabled={!canSave}>
+              {submitLabel}
+            </button>
+          </div>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 
 
 
 
 function Label({ children, required }: { children: React.ReactNode; required?: boolean }) {
   return (
-    <div className="text-xs text-slate-500 mb-1">
+    <div className="form-label mb-1">
       {children}{required && <span className="ml-1 text-rose-500">*</span>}
     </div>
   );
@@ -491,7 +554,7 @@ function MaterialForm({
           <input
             ref={codeRef}
             maxLength={20}
-            className="w-full px-3 py-2 rounded-xl border text-sm"
+            className="form-control w-full"
             data-invalid={!!err("code")}
             value={form.code}
             onChange={(e) => set("code", e.target.value)}
@@ -506,7 +569,7 @@ function MaterialForm({
           <Label required>Ед. изм.</Label>
           <select
             ref={uomRef}
-            className="w-full mrp-select"
+            className="form-control w-full"
             data-invalid={!!err("uom")}
             value={form.uom}
             onChange={(e) => set("uom", e.target.value)}
@@ -525,7 +588,7 @@ function MaterialForm({
           <Label required>Наименование</Label>
           <input
             ref={nameRef}
-            className="w-full px-3 py-2 rounded-xl border text-sm"
+            className="form-control w-full"
             data-invalid={!!err("name")}
             value={form.name}
             onChange={(e) => set("name", e.target.value)}
@@ -541,7 +604,7 @@ function MaterialForm({
           <div className="flex items-center gap-2">
             <select
               ref={vendorRef}
-              className="w-full mrp-select"
+              className="form-control w-full"
               data-invalid={!!err("vendorId")}
               value={form.vendorId}
               onChange={(e) => set("vendorId", e.target.value)}
@@ -571,7 +634,7 @@ function MaterialForm({
           <div className="flex items-center gap-2">
             <select
               ref={catRef}
-              className="w-full mrp-select"
+              className="form-control w-full"
               data-invalid={!!err("group")}
               value={form.group ?? ""}
               onChange={(e) => set("group", e.target.value)}
@@ -602,7 +665,7 @@ function MaterialForm({
             type="number"
             min={1}
             step={1}
-            className="w-full px-3 py-2 rounded-xl border text-sm"
+            className="form-control w-full"
             value={form.moq ?? ""}
             onChange={(e) => {
               const raw = e.target.value;
@@ -620,7 +683,7 @@ function MaterialForm({
             type="number"
             min={0}
             step={1}
-            className="w-full px-3 py-2 rounded-xl border text-sm"
+            className="form-control w-full"
             value={form.leadTimeDays ?? ""}
             onChange={(e) => {
               const raw = e.target.value;
@@ -636,15 +699,15 @@ function MaterialForm({
           <Label>Цена (опц.)</Label>
           <div className="relative">
             <input
-              type="number"
-              min={0}
-              step="0.01"
-              className="w-full px-3 py-2 rounded-xl border text-sm pr-10"
-              value={form.price ?? ""}
-              onChange={(e) => {
-                const v = e.target.value;
-                if (v === "") { set("price", undefined as any); return; }
-                set("price", Math.max(0, normNum(v, 0)));
+            type="number"
+            min={0}
+            step="0.01"
+            className="form-control w-full pr-10"
+            value={form.price ?? ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === "") { set("price", undefined as any); return; }
+              set("price", Math.max(0, normNum(v, 0)));
               }}
               placeholder="0.00"
             />
@@ -656,7 +719,7 @@ function MaterialForm({
         <div>
           <Label>Валюта</Label>
           <select
-            className="w-full mrp-select"
+            className="form-control w-full"
             value={form.currency || "RUB"}
             onChange={(e) => set("currency", e.target.value)}
           >
@@ -669,8 +732,8 @@ function MaterialForm({
 
       {/* footer кнопки формы */}
       <div className="mt-3 flex items-center justify-end gap-2">
-        <button type="button" className="app-pill app-pill--md" onClick={onCancel}>Отмена</button>
-        <button type="submit" className="app-pill app-pill--md is-active">Сохранить</button>
+        <button type="button" className="mrp-btn" onClick={onCancel}>Отмена</button>
+        <button type="submit" className="mrp-btn mrp-btn--primary">Сохранить</button>
       </div>
     </form>
   );
@@ -731,6 +794,87 @@ function ProductForm({
     return Number.isFinite(n) ? n : undefined;
   };
 
+  const boxVolumeM3 = React.useMemo(() => {
+    const l = Number(m.boxLength ?? 0);
+    const w = Number(m.boxWidth ?? 0);
+    const h = Number(m.boxHeight ?? 0);
+    if (l <= 0 || w <= 0 || h <= 0) return null;
+    return (l * w * h) / 1_000_000;
+  }, [m.boxLength, m.boxWidth, m.boxHeight]);
+
+  const unitWeight = Number(m.unitWeight ?? 0);
+  const unitsPerBox = Number(m.unitsPerBox ?? 0);
+  const boxWeightCalc = unitWeight > 0 && unitsPerBox > 0 ? unitWeight * unitsPerBox : null;
+  const boxDensity = boxVolumeM3 && boxWeightCalc ? boxWeightCalc / boxVolumeM3 : null;
+  const boxClass =
+    boxDensity == null
+      ? ""
+      : boxDensity >= 200
+        ? "Тяжёлый"
+        : boxDensity >= 50
+          ? "Нормальный"
+          : "Лёгкий";
+
+  const palletInfo = React.useMemo(() => {
+    const l = Number(m.boxLength ?? 0);
+    const w = Number(m.boxWidth ?? 0);
+    const h = Number(m.boxHeight ?? 0);
+    if (!boxVolumeM3 || l <= 0 || w <= 0 || h <= 0 || !boxWeightCalc) {
+      return { maxBoxes: null, orientation: "" };
+    }
+
+    const PAL_W_CM = 120;
+    const PAL_D_CM = 80;
+    const PAL_TOTAL_H_CM = 180;
+    const PAL_SELF_H_CM = 14;
+    const PAL_AVAIL_H_CM = PAL_TOTAL_H_CM - PAL_SELF_H_CM;
+    const PAL_VOL_M3 = 1.2 * 0.8 * 1.8;
+    const PAL_MAX_KG = 500;
+
+    const limVol = Math.floor(PAL_VOL_M3 / boxVolumeM3);
+    const limKg = Math.floor(PAL_MAX_KG / boxWeightCalc);
+
+    const perms = [
+      { dims: [l, w, h], tag: "нормально" },
+      { dims: [w, l, h], tag: "нормально" },
+      { dims: [l, h, w], tag: "стоя" },
+      { dims: [h, l, w], tag: "стоя" },
+      { dims: [w, h, l], tag: "стоя" },
+      { dims: [h, w, l], tag: "стоя" },
+    ];
+
+    let bestCnt = 0;
+    let bestTag = "";
+    let bestBase: [number, number] = [0, 0];
+
+    perms.forEach((p) => {
+      if (p.tag === "стоя" && (h * 2 < l || h * 2 < w)) return;
+
+      const [d1, d2, d3] = p.dims;
+      const baseCount =
+        Math.floor(PAL_W_CM / d1) *
+        Math.floor(PAL_D_CM / d2) *
+        Math.floor(PAL_AVAIL_H_CM / d3);
+      const cnt = Math.min(limVol, limKg, baseCount);
+
+      if (cnt > bestCnt) {
+        bestCnt = cnt;
+        bestTag = p.tag;
+        bestBase = [d1, d2];
+      }
+    });
+
+    if (!bestCnt) return { maxBoxes: null, orientation: "" };
+
+    return {
+      maxBoxes: bestCnt,
+      orientation:
+        bestTag === "стоя"
+          ? `стоя (основание: ${bestBase[0]}×${bestBase[1]})`
+          : "нормально",
+    };
+  }, [m.boxLength, m.boxWidth, m.boxHeight, boxVolumeM3, boxWeightCalc]);
+
   const save = (e: React.FormEvent) => {
     e.preventDefault();
     const code = m.code.trim();
@@ -746,280 +890,311 @@ function ProductForm({
   };
 
   return (
-    <form onSubmit={save} className="form-grid-2">
-      <div>
-        <label>Статус</label>
-        <select
-          className="w-full mrp-select"
-          value={m.status}
-          onChange={(e) => setM({ ...m, status: e.target.value as any })}
-        >
-          {dicts.statuses.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-      </div>
+    <form onSubmit={save}>
+      <div className="form-grid-2">
+        {/* Статус */}
+        <div>
+          <Label>Статус</Label>
+          <select
+            className="w-full mrp-select"
+            value={m.status}
+            onChange={(e) => setM({ ...m, status: e.target.value as any })}
+          >
+            {dicts.statuses.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        </div>
 
-      <div>
-        <label>Артикул (code)</label>
-        <input
-          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-          value={m.code}
-          onChange={(e) => setM({ ...m, code: e.target.value })}
-          placeholder="например PRD-1001"
-        />
-      </div>
-
-      <div>
-        <label>Наименование</label>
-        <div className="flex gap-2">
+        {/* Код */}
+        <div>
+          <Label>Артикул (code)</Label>
           <input
-            className="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-sm"
-            value={m.name}
-            onChange={(e) => setM({ ...m, name: e.target.value })}
+            className="form-control w-full"
+            value={m.code}
+            onChange={(e) => setM({ ...m, code: e.target.value })}
+            placeholder="например PRD-1001"
           />
-          <button
-            type="button"
-            className="app-pill app-pill--sm"
-            onClick={() =>
-              openSpecFor({ id: m.id || undefined, code: m.code, name: m.name })
-            }
-          >
-            Спецификация…
-          </button>
+        </div>
+
+        {/* Наименование + Спецификация */}
+        <div className="form-span-2">
+          <Label>Наименование</Label>
+          <div className="flex gap-2">
+            <input
+              className="form-control flex-1"
+              value={m.name}
+              onChange={(e) => setM({ ...m, name: e.target.value })}
+            />
+            <button
+              type="button"
+              className="mrp-btn mrp-btn--ghost mrp-btn--xs"
+              onClick={() => openSpecFor({ id: m.id || undefined, code: m.code, name: m.name })}
+            >
+              Спецификация…
+            </button>
+          </div>
+        </div>
+
+        {/* Категория */}
+        <div>
+          <Label>Категория</Label>
+          <div className="flex items-center gap-2">
+            <select
+              className="form-control w-full"
+              value={m.category}
+              onChange={(e) => setM({ ...m, category: e.target.value })}
+            >
+              <option value=""></option>
+              {dicts.categories.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="mrp-icon-btn"
+              title="Добавить категорию"
+              onClick={async () => {
+                const name = prompt("Новая категория");
+                if (name) await dicts.addCategory(name);
+              }}
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Единица */}
+        <div>
+          <Label>Ед. изм.</Label>
+          <div className="flex items-center gap-2">
+            <select
+              className="form-control w-full"
+              value={m.uom}
+              onChange={(e) => setM({ ...m, uom: e.target.value })}
+            >
+              {dicts.uoms.map((u) => (
+                <option key={u} value={u}>{u}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="mrp-icon-btn"
+              title="Добавить единицу"
+              onClick={async () => {
+                const u = prompt("Новая единица");
+                if (u) await dicts.addUom(u);
+              }}
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Цена */}
+        <div>
+          <Label>Цена</Label>
+          <div className="relative">
+            <input
+              type="number"
+              step="0.01"
+              className="form-control w-full pr-10"
+              value={m.price ?? ""}
+              onChange={(e) => {
+                const raw = e.target.value;
+                setM({ ...m, price: raw === "" ? undefined : Number(raw) });
+              }}
+              placeholder="0.00"
+            />
+            <span className="absolute right-3 top-2.5 text-slate-400 select-none">₽</span>
+          </div>
+        </div>
+
+        {/* Маркетплейсы блок */}
+        <div className="form-span-2 mt-2 text-sm font-semibold text-slate-600">Маркетплейсы</div>
+
+        <div>
+          <Label>SKU WB</Label>
+          <input
+            className="form-control w-full"
+            value={m.wbSku ?? ""}
+            onChange={(e) => setM({ ...m, wbSku: e.target.value || undefined })}
+            placeholder="Например, WB123456"
+          />
+        </div>
+
+        <div>
+          <Label>SKU Ozon</Label>
+          <input
+            className="form-control w-full"
+            value={m.ozonSku ?? ""}
+            onChange={(e) => setM({ ...m, ozonSku: e.target.value || undefined })}
+          />
+        </div>
+
+        <div>
+          <Label>Штрихкод / EAN</Label>
+          <input
+            className="form-control w-full"
+            value={m.barcode ?? ""}
+            onChange={(e) => setM({ ...m, barcode: e.target.value || undefined })}
+            placeholder="460…"
+          />
+        </div>
+
+        <div>
+          <Label>Категория WB</Label>
+          <input
+            className="form-control w-full"
+            value={m.mpCategoryWb ?? ""}
+            onChange={(e) => setM({ ...m, mpCategoryWb: e.target.value || undefined })}
+            placeholder="Из классификатора WB"
+          />
+        </div>
+
+        <div>
+          <Label>Категория Ozon</Label>
+          <input
+            className="form-control w-full"
+            value={m.mpCategoryOzon ?? ""}
+            onChange={(e) => setM({ ...m, mpCategoryOzon: e.target.value || undefined })}
+          />
+        </div>
+
+        {/* Упаковка */}
+        <div className="form-span-2 mt-2 text-sm font-semibold text-slate-600">Упаковка</div>
+
+        <div>
+          <Label>Длина коробки, см</Label>
+          <input
+            type="number"
+            step="0.1"
+            className="form-control w-full"
+            value={m.boxLength ?? ""}
+            onChange={(e) => setM({ ...m, boxLength: parseNumber(e.target.value) })}
+          />
+        </div>
+
+        <div>
+          <Label>Ширина коробки, см</Label>
+          <input
+            type="number"
+            step="0.1"
+            className="form-control w-full"
+            value={m.boxWidth ?? ""}
+            onChange={(e) => setM({ ...m, boxWidth: parseNumber(e.target.value) })}
+          />
+        </div>
+
+        <div>
+          <Label>Высота коробки, см</Label>
+          <input
+            type="number"
+            step="0.1"
+            className="form-control w-full"
+            value={m.boxHeight ?? ""}
+            onChange={(e) => setM({ ...m, boxHeight: parseNumber(e.target.value) })}
+          />
+        </div>
+
+        <div>
+          <Label>Вес 1 шт, кг</Label>
+          <input
+            type="number"
+            step="0.001"
+            className="form-control w-full"
+            value={m.unitWeight ?? ""}
+            onChange={(e) => setM({ ...m, unitWeight: parseNumber(e.target.value) })}
+          />
+        </div>
+
+        <div>
+          <Label>Вес коробки, кг (расчёт)</Label>
+          <input
+            className="form-control w-full"
+            value={boxWeightCalc == null ? "" : boxWeightCalc.toFixed(3)}
+            placeholder="—"
+            readOnly
+          />
+        </div>
+
+        <div>
+          <Label>Объём короба, м³</Label>
+          <input
+            className="form-control w-full"
+            value={boxVolumeM3 == null ? "" : boxVolumeM3.toFixed(4)}
+            placeholder="—"
+            readOnly
+          />
+        </div>
+
+        <div>
+          <Label>Характеристика короба</Label>
+          <input
+            className="form-control w-full"
+            value={boxClass}
+            placeholder="—"
+            readOnly
+          />
+        </div>
+
+        <div>
+          <Label>Коробов на паллете (расчёт)</Label>
+          <input
+            className="form-control w-full"
+            value={palletInfo.maxBoxes == null ? "" : String(palletInfo.maxBoxes)}
+            placeholder="—"
+            readOnly
+          />
+        </div>
+
+        <div>
+          <Label>Ориентация короба (расчёт)</Label>
+          <input
+            className="form-control w-full"
+            value={palletInfo.orientation}
+            placeholder="—"
+            readOnly
+          />
+        </div>
+
+        <div>
+          <Label>Штук в коробке</Label>
+          <input
+            type="number"
+            step="1"
+            className="form-control w-full"
+            value={m.unitsPerBox ?? ""}
+            onChange={(e) => setM({ ...m, unitsPerBox: parseNumber(e.target.value) })}
+          />
+        </div>
+
+        <div>
+          <Label>Штук на паллете</Label>
+          <input
+            type="number"
+            step="1"
+            className="form-control w-full"
+            value={m.unitsPerPallet ?? ""}
+            onChange={(e) => setM({ ...m, unitsPerPallet: parseNumber(e.target.value) })}
+          />
+        </div>
+
+        <div>
+          <Label>Вес паллеты, кг</Label>
+          <input
+            type="number"
+            step="0.1"
+            className="form-control w-full"
+            value={m.palletWeight ?? ""}
+            onChange={(e) => setM({ ...m, palletWeight: parseNumber(e.target.value) })}
+          />
         </div>
       </div>
 
-      <div>
-        <label>Категория</label>
-        <div className="flex gap-2">
-          <select
-            className="flex-1 mrp-select"
-            value={m.category}
-            onChange={(e) => setM({ ...m, category: e.target.value })}
-          >
-            <option value=""></option>
-            {dicts.categories.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className="app-pill app-pill--sm"
-            onClick={async () => {
-              const name = prompt("Новая категория");
-              if (name) await dicts.addCategory(name);
-            }}
-          >
-            +
-          </button>
-        </div>
-      </div>
-
-      <div>
-        <label>Ед. изм.</label>
-        <div className="flex gap-2">
-          <select
-            className="flex-1 mrp-select"
-            value={m.uom}
-            onChange={(e) => setM({ ...m, uom: e.target.value })}
-          >
-            {dicts.uoms.map((u) => (
-              <option key={u} value={u}>
-                {u}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className="app-pill app-pill--sm"
-            onClick={async () => {
-              const u = prompt("Новая единица");
-              if (u) await dicts.addUom(u);
-            }}
-          >
-            +
-          </button>
-        </div>
-      </div>
-
-      <div>
-        <label>Цена</label>
-        <input
-          type="number"
-          step="0.01"
-          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-          value={m.price ?? ""}
-          onChange={(e) => {
-            const raw = e.target.value;
-            setM({ ...m, price: raw === "" ? undefined : Number(raw) });
-          }}
-          placeholder="0.00"
-        />
-      </div>
-
-      <div className="col-span-2 mt-4">
-        <div className="text-sm font-semibold text-slate-600">Маркетплейсы</div>
-      </div>
-
-      <div>
-        <label>SKU WB</label>
-        <input
-          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-          value={m.wbSku ?? ""}
-          onChange={(e) => setM({ ...m, wbSku: e.target.value || undefined })}
-          placeholder="Например, WB123456"
-        />
-      </div>
-
-      <div>
-        <label>SKU Ozon</label>
-        <input
-          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-          value={m.ozonSku ?? ""}
-          onChange={(e) => setM({ ...m, ozonSku: e.target.value || undefined })}
-        />
-      </div>
-
-      <div>
-        <label>Штрихкод / EAN</label>
-        <input
-          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-          value={m.barcode ?? ""}
-          onChange={(e) => setM({ ...m, barcode: e.target.value || undefined })}
-          placeholder="460…"
-        />
-      </div>
-
-      <div>
-        <label>Категория WB</label>
-        <input
-          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-          value={m.mpCategoryWb ?? ""}
-          onChange={(e) =>
-            setM({ ...m, mpCategoryWb: e.target.value || undefined })
-          }
-          placeholder="Из классификатора WB"
-        />
-      </div>
-
-      <div>
-        <label>Категория Ozon</label>
-        <input
-          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-          value={m.mpCategoryOzon ?? ""}
-          onChange={(e) =>
-            setM({ ...m, mpCategoryOzon: e.target.value || undefined })
-          }
-        />
-      </div>
-
-      <div className="col-span-2 mt-4">
-        <div className="text-sm font-semibold text-slate-600">Упаковка</div>
-      </div>
-
-      <div>
-        <label>Длина коробки, см</label>
-        <input
-          type="number"
-          step="0.1"
-          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-          value={m.boxLength ?? ""}
-          onChange={(e) =>
-            setM({ ...m, boxLength: parseNumber(e.target.value) })
-          }
-        />
-      </div>
-
-      <div>
-        <label>Ширина коробки, см</label>
-        <input
-          type="number"
-          step="0.1"
-          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-          value={m.boxWidth ?? ""}
-          onChange={(e) =>
-            setM({ ...m, boxWidth: parseNumber(e.target.value) })
-          }
-        />
-      </div>
-
-      <div>
-        <label>Высота коробки, см</label>
-        <input
-          type="number"
-          step="0.1"
-          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-          value={m.boxHeight ?? ""}
-          onChange={(e) =>
-            setM({ ...m, boxHeight: parseNumber(e.target.value) })
-          }
-        />
-      </div>
-
-      <div>
-        <label>Вес коробки, кг</label>
-        <input
-          type="number"
-          step="0.01"
-          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-          value={m.boxWeight ?? ""}
-          onChange={(e) =>
-            setM({ ...m, boxWeight: parseNumber(e.target.value) })
-          }
-        />
-      </div>
-
-      <div>
-        <label>Штук в коробке</label>
-        <input
-          type="number"
-          step="1"
-          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-          value={m.unitsPerBox ?? ""}
-          onChange={(e) =>
-            setM({ ...m, unitsPerBox: parseNumber(e.target.value) })
-          }
-        />
-      </div>
-
-      <div>
-        <label>Штук на паллете</label>
-        <input
-          type="number"
-          step="1"
-          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-          value={m.unitsPerPallet ?? ""}
-          onChange={(e) =>
-            setM({ ...m, unitsPerPallet: parseNumber(e.target.value) })
-          }
-        />
-      </div>
-
-      <div>
-        <label>Вес паллеты, кг</label>
-        <input
-          type="number"
-          step="0.1"
-          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-          value={m.palletWeight ?? ""}
-          onChange={(e) =>
-            setM({ ...m, palletWeight: parseNumber(e.target.value) })
-          }
-        />
-      </div>
-
-      <div className="col-span-2 flex justify-end gap-2 mt-2">
-        <button type="button" className="app-pill app-pill--md" onClick={onCancel}>
-          Отмена
-        </button>
-        <button type="submit" className="app-pill app-pill--md is-active">
-          Сохранить
-        </button>
+      <div className="mt-4 flex items-center justify-end gap-2">
+        <button type="button" className="mrp-btn" onClick={onCancel}>Отмена</button>
+        <button type="submit" className="mrp-btn mrp-btn--primary">Сохранить</button>
       </div>
     </form>
   );
@@ -1196,7 +1371,7 @@ function ProductsView() {
       const { data, error } = await supabase
         .from("items")
         .select(
-          "id, status, code, name, category, uom, price, wb_sku, ozon_sku, barcode, mp_category_wb, mp_category_ozon, box_length, box_width, box_height, box_weight, units_per_box, units_per_pallet, pallet_weight"
+          "id, status, code, name, category, uom, price, wb_sku, ozon_sku, barcode, mp_category_wb, mp_category_ozon, box_length, box_width, box_height, box_volume, unit_weight, box_weight, units_per_box, units_per_pallet, pallet_weight"
         )
         .eq("kind", "product")
         .order("name", { ascending: true });
@@ -1217,6 +1392,8 @@ function ProductsView() {
         boxLength: row.box_length ?? undefined,
         boxWidth: row.box_width ?? undefined,
         boxHeight: row.box_height ?? undefined,
+        boxVolume: row.box_volume ?? undefined,
+        unitWeight: row.unit_weight ?? undefined,
         boxWeight: row.box_weight ?? undefined,
         unitsPerBox: row.units_per_box ?? undefined,
         unitsPerPallet: row.units_per_pallet ?? undefined,
@@ -1253,8 +1430,27 @@ function ProductsView() {
     setProdModalOpen(true);
   };
 
+  useEffect(() => {
+    const raw = localStorage.getItem("mrp.openProductId");
+    if (!raw || !items.length) return;
+    let key = raw;
+    try { key = JSON.parse(raw); } catch {}
+    const target = items.find((p) => p.id === key || p.code === key);
+    if (target) {
+      localStorage.removeItem("mrp.openProductId");
+      openEdit(target);
+    }
+  }, [items]);
+
   const saveProduct = async (p: Product) => {
     const id = p.id && isUuid(p.id) ? p.id : generateUuid();
+    const unitWeight = Number(p.unitWeight ?? 0);
+    const unitsPerBox = Number(p.unitsPerBox ?? 0);
+    const boxWeightCalc = unitWeight > 0 && unitsPerBox > 0 ? unitWeight * unitsPerBox : null;
+    const boxVolumeCalc =
+      p.boxLength && p.boxWidth && p.boxHeight
+        ? (Number(p.boxLength) * Number(p.boxWidth) * Number(p.boxHeight)) / 1_000_000
+        : null;
     const payload = {
       id,
       kind: "product",
@@ -1272,7 +1468,9 @@ function ProductsView() {
       box_length: p.boxLength ?? null,
       box_width: p.boxWidth ?? null,
       box_height: p.boxHeight ?? null,
-      box_weight: p.boxWeight ?? null,
+      box_volume: boxVolumeCalc,
+      unit_weight: p.unitWeight ?? null,
+      box_weight: boxWeightCalc,
       units_per_box: p.unitsPerBox ?? null,
       units_per_pallet: p.unitsPerPallet ?? null,
       pallet_weight: p.palletWeight ?? null,
@@ -2377,6 +2575,8 @@ export default function AppShell() {
             <div className="settings-wrap">
               <SettingsMarketplaceWarehouses />
             </div>
+          ) : currentSection?.key === "settings" && activeSubKey === "users" ? (
+            <SettingsUsers />
           ) : currentSection?.key === "settings" && activeSubKey === "integr" ? (
             <div className="settings-wrap">
               <SettingsIntegrations />
@@ -2402,20 +2602,37 @@ function DictList({
   placeholder?: string;
   allowRename?: boolean;
 }) {
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<"add" | "rename">("add");
+  const [modalValue, setModalValue] = useState("");
+  const [renameTarget, setRenameTarget] = useState<string | null>(null);
+
   const add = () => {
-    const v = (window.prompt(placeholder) ?? "").trim();
-    if (!v) return;
-    setItems(prev => prev.includes(v) ? prev : [...prev, v]);
+    setModalMode("add");
+    setModalValue("");
+    setRenameTarget(null);
+    setModalOpen(true);
   };
   const rename = (val: string) => {
     if (!allowRename) return;
-    const v = (window.prompt("Новое значение:", val) ?? "").trim();
-    if (!v) return;
-    setItems(prev => prev.map(x => x === val ? v : x));
+    setModalMode("rename");
+    setModalValue(val);
+    setRenameTarget(val);
+    setModalOpen(true);
   };
   const remove = (val: string) => {
     if (!window.confirm(`Удалить «${val}»?`)) return;
     setItems(prev => prev.filter(x => x !== val));
+  };
+  const handleSubmit = () => {
+    const v = modalValue.trim();
+    if (!v) return;
+    if (modalMode === "add") {
+      setItems(prev => (prev.includes(v) ? prev : [...prev, v]));
+    } else if (renameTarget) {
+      setItems(prev => prev.map(x => (x === renameTarget ? v : x)));
+    }
+    setModalOpen(false);
   };
 
   return (
@@ -2468,6 +2685,18 @@ function DictList({
           </tbody>
         </table>
       </div>
+
+      <InputModal
+        open={modalOpen}
+        title={modalMode === "add" ? title : "Переименование"}
+        label={modalMode === "add" ? title : "Новое значение"}
+        placeholder={modalMode === "add" ? placeholder : renameTarget ?? ""}
+        value={modalValue}
+        onChange={setModalValue}
+        onClose={() => setModalOpen(false)}
+        onSubmit={handleSubmit}
+        submitLabel={modalMode === "add" ? "Добавить" : "Сохранить"}
+      />
     </div>
   );
 }
@@ -2476,19 +2705,36 @@ function DictList({
 function SettingsUoms() {
   const { uoms, addUom, renameUom, removeUom } = useSupabaseUoms();
 
-  const handleAdd = async () => {
-    const value = (window.prompt("Новая единица измерения") ?? "").trim();
-    if (!value) return;
-    await addUom(value);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<"add" | "rename">("add");
+  const [modalValue, setModalValue] = useState("");
+  const [target, setTarget] = useState<{ id?: string; current?: string }>({});
+
+  const handleAdd = () => {
+    setModalMode("add");
+    setModalValue("");
+    setTarget({});
+    setModalOpen(true);
   };
-  const handleRename = async (id: string, current: string) => {
-    const value = (window.prompt("Новое название", current) ?? "").trim();
-    if (!value || value === current) return;
-    await renameUom(id, value);
+  const handleRename = (id: string, current: string) => {
+    setModalMode("rename");
+    setModalValue(current);
+    setTarget({ id, current });
+    setModalOpen(true);
   };
   const handleDelete = async (id: string, name: string) => {
     if (!window.confirm(`Удалить «${name}»?`)) return;
     await removeUom(id);
+  };
+  const handleSubmit = async () => {
+    const value = modalValue.trim();
+    if (!value) return;
+    if (modalMode === "add") {
+      await addUom(value);
+    } else if (target.id && value !== target.current) {
+      await renameUom(target.id, value);
+    }
+    setModalOpen(false);
   };
 
   return (
@@ -2541,6 +2787,18 @@ function SettingsUoms() {
           </tbody>
         </table>
       </div>
+
+      <InputModal
+        open={modalOpen}
+        title={modalMode === "add" ? "Новая единица измерения" : "Переименование"}
+        label={modalMode === "add" ? "Единица измерения" : "Новое название"}
+        placeholder={modalMode === "add" ? "Например: кг" : target.current}
+        value={modalValue}
+        onChange={setModalValue}
+        onClose={() => setModalOpen(false)}
+        onSubmit={handleSubmit}
+        submitLabel={modalMode === "add" ? "Добавить" : "Сохранить"}
+      />
     </div>
   );
 }
@@ -2553,19 +2811,36 @@ function SettingsCurrencies() {
 function SettingsGroups() {
   const { groups, addGroup, renameGroup, removeGroup } = useSupabaseGroups();
 
-  const handleAdd = async () => {
-    const v = (window.prompt("Новая группа") ?? "").trim();
-    if (!v) return;
-    await addGroup(v);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<"add" | "rename">("add");
+  const [modalValue, setModalValue] = useState("");
+  const [target, setTarget] = useState<{ id?: string; current?: string }>({});
+
+  const handleAdd = () => {
+    setModalMode("add");
+    setModalValue("");
+    setTarget({});
+    setModalOpen(true);
   };
-  const handleRename = async (id: string, current: string) => {
-    const v = (window.prompt("Новое название группы", current) ?? "").trim();
-    if (!v || v === current) return;
-    await renameGroup(id, current, v);
+  const handleRename = (id: string, current: string) => {
+    setModalMode("rename");
+    setModalValue(current);
+    setTarget({ id, current });
+    setModalOpen(true);
   };
   const handleRemove = async (id: string, name: string) => {
     if (!window.confirm(`Удалить группу «${name}»?`)) return;
     await removeGroup(id, name);
+  };
+  const handleSubmit = async () => {
+    const v = modalValue.trim();
+    if (!v) return;
+    if (modalMode === "add") {
+      await addGroup(v);
+    } else if (target.id && v !== target.current) {
+      await renameGroup(target.id, target.current ?? "", v);
+    }
+    setModalOpen(false);
   };
 
   return (
@@ -2618,6 +2893,18 @@ function SettingsGroups() {
           </tbody>
         </table>
       </div>
+
+      <InputModal
+        open={modalOpen}
+        title={modalMode === "add" ? "Новая группа" : "Переименование"}
+        label={modalMode === "add" ? "Группа" : "Новое название"}
+        placeholder={modalMode === "add" ? "Например: Химия" : target.current}
+        value={modalValue}
+        onChange={setModalValue}
+        onClose={() => setModalOpen(false)}
+        onSubmit={handleSubmit}
+        submitLabel={modalMode === "add" ? "Добавить" : "Сохранить"}
+      />
     </div>
   );
 }
@@ -2631,19 +2918,36 @@ function SettingsCategories() {
     removeCategory,
   } = useSupabaseCategories();
 
-  const handleAdd = async () => {
-    const v = (window.prompt("Новая категория") ?? "").trim();
-    if (!v) return;
-    await addCategory(v);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<"add" | "rename">("add");
+  const [modalValue, setModalValue] = useState("");
+  const [target, setTarget] = useState<{ id?: string; current?: string }>({});
+
+  const handleAdd = () => {
+    setModalMode("add");
+    setModalValue("");
+    setTarget({});
+    setModalOpen(true);
   };
-  const handleRename = async (id: string, current: string) => {
-    const v = (window.prompt("Новое название:", current) ?? "").trim();
-    if (!v || v === current) return;
-    await renameCategory(id, v);
+  const handleRename = (id: string, current: string) => {
+    setModalMode("rename");
+    setModalValue(current);
+    setTarget({ id, current });
+    setModalOpen(true);
   };
   const handleRemove = async (id: string, name: string) => {
     if (!window.confirm(`Удалить «${name}»?`)) return;
     await removeCategory(id);
+  };
+  const handleSubmit = async () => {
+    const v = modalValue.trim();
+    if (!v) return;
+    if (modalMode === "add") {
+      await addCategory(v);
+    } else if (target.id && v !== target.current) {
+      await renameCategory(target.id, v);
+    }
+    setModalOpen(false);
   };
 
   return (
@@ -2709,6 +3013,18 @@ function SettingsCategories() {
           </tbody>
         </table>
       </div>
+
+      <InputModal
+        open={modalOpen}
+        title={modalMode === "add" ? "Новая категория" : "Переименование"}
+        label={modalMode === "add" ? "Категория" : "Новое название"}
+        placeholder={modalMode === "add" ? "Например: Посуда" : target.current}
+        value={modalValue}
+        onChange={setModalValue}
+        onClose={() => setModalOpen(false)}
+        onSubmit={handleSubmit}
+        submitLabel={modalMode === "add" ? "Добавить" : "Сохранить"}
+      />
     </div>
   );
 }
@@ -2722,6 +3038,7 @@ function SettingsWarehouses() {
     addPhysical,
     addZone,
     renameWarehouse,
+    updateWarehouse,
     deleteWarehouse,
   } = useSupabaseWarehouses();
   const [balances] = useStockBalances();
@@ -2738,20 +3055,54 @@ function SettingsWarehouses() {
     if (!window.confirm(`Удалить «${name}»?`)) return;
     await deleteWarehouse(id);
   };
-  const handleRename = async (id: string, curName: string) => {
-    const name = (window.prompt("Новое название:", curName) ?? "").trim();
-    if (!name || name === curName) return;
-    await renameWarehouse(id, name);
+  const [whModalOpen, setWhModalOpen] = useState(false);
+  const [whModalMode, setWhModalMode] = useState<"addPhysical" | "addZone" | "rename" | "chat">("addPhysical");
+  const [whModalValue, setWhModalValue] = useState("");
+  const [whTarget, setWhTarget] = useState<{ id?: string; current?: string; physId?: string; tgChatId?: string | null }>({});
+
+  const handleRename = (id: string, curName: string) => {
+    setWhModalMode("rename");
+    setWhModalValue(curName);
+    setWhTarget({ id, current: curName });
+    setWhModalOpen(true);
   };
-  const handleAddPhysical = async () => {
-    const name = (window.prompt("Название физического склада:") ?? "").trim();
-    if (!name) return;
-    await addPhysical(name);
+  const handleChat = (id: string, tgChatId: string | null) => {
+    setWhModalMode("chat");
+    setWhModalValue(tgChatId ?? "");
+    setWhTarget({ id, tgChatId });
+    setWhModalOpen(true);
   };
-  const handleAddZone = async (physId: string) => {
-    const name = (window.prompt("Название зоны (виртуальный склад):") ?? "").trim();
-    if (!name) return;
-    await addZone(physId, name);
+  const handleAddPhysical = () => {
+    setWhModalMode("addPhysical");
+    setWhModalValue("");
+    setWhTarget({});
+    setWhModalOpen(true);
+  };
+  const handleAddZone = (physId: string) => {
+    setWhModalMode("addZone");
+    setWhModalValue("");
+    setWhTarget({ physId });
+    setWhModalOpen(true);
+  };
+  const handleWhSubmit = async () => {
+    const name = whModalValue.trim();
+    if (whModalMode === "addPhysical") {
+      if (!name) return;
+      await addPhysical(name);
+    } else if (whModalMode === "addZone") {
+      if (!name) return;
+      if (!whTarget.physId) return;
+      await addZone(whTarget.physId, name);
+    } else if (whModalMode === "rename") {
+      if (!name) return;
+      if (!whTarget.id || name === whTarget.current) return;
+      await renameWarehouse(whTarget.id, name);
+    } else if (whModalMode === "chat") {
+      if (!whTarget.id) return;
+      const next = name ? name : null;
+      await updateWarehouse(whTarget.id, { tgChatId: next });
+    }
+    setWhModalOpen(false);
   };
 
   return (
@@ -2776,6 +3127,7 @@ function SettingsWarehouses() {
           <thead className="bg-slate-50 text-slate-500">
             <tr>
               <th className="text-left px-2 py-1 w-[180px]">Физический склад</th>
+              <th className="text-left px-2 py-1 w-[160px]">TG чат ID</th>
               <th className="text-left px-2 py-1">Зоны (виртуальные)</th>
               <th className="text-left px-2 py-1 w-[90px]">Действия</th>
             </tr>
@@ -2787,6 +3139,18 @@ function SettingsWarehouses() {
                 <tr key={p.id} className="border-t border-slate-100 align-top">
                   <td className="px-2 py-1">
                     <div className="font-medium">{p.name}</div>
+                  </td>
+                  <td className="px-2 py-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-600">{p.tgChatId || "—"}</span>
+                      <button
+                        className="mrp-btn mrp-btn--ghost mrp-btn--xs"
+                        type="button"
+                        onClick={() => handleChat(p.id, p.tgChatId)}
+                      >
+                        Изменить
+                      </button>
+                    </div>
                   </td>
                   <td className="px-2 py-1">
                     <div className="flex flex-wrap items-center gap-1.5">
@@ -2813,15 +3177,342 @@ function SettingsWarehouses() {
                 </tr>
               );
             })}
-            {physical.length === 0 && <tr><td colSpan={3} className="px-2 py-4 text-center text-slate-400">Пока нет складов</td></tr>}
+            {physical.length === 0 && <tr><td colSpan={4} className="px-2 py-4 text-center text-slate-400">Пока нет складов</td></tr>}
           </tbody>
         </table>
+        </div>
+      </div>
+
+      <InputModal
+        open={whModalOpen}
+        title={
+          whModalMode === "addPhysical"
+            ? "Физический склад"
+            : whModalMode === "addZone"
+              ? "Новая зона"
+              : whModalMode === "rename"
+                ? "Переименование"
+                : "Telegram чат"
+        }
+        label={
+          whModalMode === "addPhysical"
+            ? "Название склада"
+            : whModalMode === "addZone"
+              ? "Название зоны"
+              : whModalMode === "rename"
+                ? "Новое название"
+                : "Chat ID"
+        }
+        placeholder={whModalMode === "rename" ? whTarget.current : undefined}
+        value={whModalValue}
+        onChange={setWhModalValue}
+        onClose={() => setWhModalOpen(false)}
+        onSubmit={handleWhSubmit}
+        submitLabel={whModalMode === "rename" || whModalMode === "chat" ? "Сохранить" : "Добавить"}
+      />
+    </div>
+  );
+}
+
+function SettingsUsers() {
+  type TgUser = {
+    id: string;
+    tg_user_id: number | null;
+    username: string | null;
+    first_name: string | null;
+    last_name: string | null;
+    role: "executor" | "controller";
+    status: "pending" | "active" | "disabled";
+    is_global_controller: boolean;
+  };
+
+  const [users, setUsers] = useState<TgUser[]>([]);
+  const [bindings, setBindings] = useState<Record<string, string[]>>({});
+  const [loading, setLoading] = useState(false);
+  const [newUsername, setNewUsername] = useState("");
+  const [newRole, setNewRole] = useState<"executor" | "controller">("controller");
+  const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
+  const { warehouses, physical, virtual } = useSupabaseWarehouses();
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("tg_users")
+        .select("id, tg_user_id, username, first_name, last_name, role, status, is_global_controller")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      setUsers((data || []) as TgUser[]);
+      const { data: linkRows, error: linkErr } = await supabase
+        .from("tg_user_warehouses")
+        .select("tg_user_id, warehouse_id, is_active");
+      if (linkErr) throw linkErr;
+      const nextBindings: Record<string, string[]> = {};
+      (linkRows || []).forEach((row: any) => {
+        if (!row.is_active) return;
+        if (!nextBindings[row.tg_user_id]) nextBindings[row.tg_user_id] = [];
+        nextBindings[row.tg_user_id].push(row.warehouse_id);
+      });
+      setBindings(nextBindings);
+    } catch (error) {
+      console.error("SettingsUsers: load tg_users", error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const handleAdd = async () => {
+    const username = newUsername.trim().replace(/^@/, "");
+    if (!username) return;
+    try {
+      const { error } = await supabase.from("tg_users").insert({
+        username,
+        role: newRole,
+        status: "pending",
+      });
+      if (error) throw error;
+      setNewUsername("");
+      await refresh();
+    } catch (error) {
+      console.error("SettingsUsers: add", error);
+      alert("Не удалось добавить пользователя");
+    }
+  };
+
+  const notifyController = async (userId: string, warehouseIds: string[]) => {
+    if (!warehouseIds.length) return;
+    try {
+      await Promise.all(
+        warehouseIds.map((warehouseId) =>
+          supabase.functions.invoke("tg-notify-controller", {
+            body: { tgUserId: userId, warehouseId },
+          }),
+        ),
+      );
+    } catch (error) {
+      console.error("SettingsUsers: notify controller", error);
+    }
+  };
+
+  const handleUpdate = async (id: string, patch: Partial<TgUser>) => {
+    try {
+      const { error } = await supabase.from("tg_users").update(patch).eq("id", id);
+      if (error) throw error;
+      if (patch.role === "controller") {
+        const currentBindings = bindings[id] || [];
+        await notifyController(id, currentBindings);
+      }
+      await refresh();
+    } catch (error) {
+      console.error("SettingsUsers: update", error);
+      alert("Не удалось обновить пользователя");
+    }
+  };
+
+  const handleRemove = async (id: string) => {
+    if (!window.confirm("Удалить пользователя?")) return;
+    try {
+      const { error } = await supabase.from("tg_users").delete().eq("id", id);
+      if (error) throw error;
+      await refresh();
+    } catch (error) {
+      console.error("SettingsUsers: delete", error);
+      alert("Не удалось удалить пользователя");
+    }
+  };
+
+  const handleToggleWarehouse = async (userId: string, warehouseId: string, checked: boolean) => {
+    try {
+      if (checked) {
+        const { error } = await supabase
+          .from("tg_user_warehouses")
+          .upsert({ tg_user_id: userId, warehouse_id: warehouseId, is_active: true }, { onConflict: "tg_user_id,warehouse_id" });
+        if (error) throw error;
+        setBindings((prev) => ({
+          ...prev,
+          [userId]: Array.from(new Set([...(prev[userId] || []), warehouseId])),
+        }));
+        const user = users.find((u) => u.id === userId);
+        if (user?.role === "controller") {
+          await notifyController(userId, [warehouseId]);
+        }
+      } else {
+        const { error } = await supabase
+          .from("tg_user_warehouses")
+          .delete()
+          .match({ tg_user_id: userId, warehouse_id: warehouseId });
+        if (error) throw error;
+        setBindings((prev) => ({
+          ...prev,
+          [userId]: (prev[userId] || []).filter((id) => id !== warehouseId),
+        }));
+      }
+    } catch (error) {
+      console.error("SettingsUsers: toggle warehouse", error);
+      alert("Не удалось обновить привязку склада");
+    }
+  };
+
+  const warehouseLabel = (warehouseId: string) => {
+    const wh = warehouses.find((w) => w.id === warehouseId);
+    if (!wh) return "";
+    if (wh.type === "virtual") {
+      const parent = warehouses.find((w) => w.id === wh.parentId);
+      return parent ? `${parent.name} / ${wh.name}` : wh.name;
+    }
+    return wh.name;
+  };
+
+  return (
+    <div className="mrp-page settings-wrap">
+      <div className="mrp-card mrp-card--compact">
+        <div className="mrp-toolbar mrp-toolbar--compact mb-2">
+          <div className="mrp-toolbar__left">
+            <div className="mrp-field">
+              <span className="mrp-field__label">Ник в Telegram</span>
+              <input
+                className="mrp-input"
+                placeholder="@username"
+                value={newUsername}
+                onChange={(e) => setNewUsername(e.target.value)}
+              />
+            </div>
+            <div className="mrp-field">
+              <span className="mrp-field__label">Роль</span>
+              <select className="mrp-select" value={newRole} onChange={(e) => setNewRole(e.target.value as any)}>
+                <option value="controller">Контролёр</option>
+                <option value="executor">Исполнитель</option>
+              </select>
+            </div>
+          </div>
+          <div className="mrp-toolbar__right">
+            <button className="mrp-btn mrp-btn--primary" onClick={handleAdd} disabled={loading}>
+              Добавить
+            </button>
+          </div>
+        </div>
+
+        <div className="mrp-hscroll">
+          <table className="mrp-table text-sm table-compact">
+            <thead className="bg-slate-50 text-slate-500">
+              <tr>
+                <th className="text-left px-2 py-1">Ник</th>
+                <th className="text-left px-2 py-1">Имя</th>
+                <th className="text-left px-2 py-1">Telegram ID</th>
+                <th className="text-left px-2 py-1">Роль</th>
+                <th className="text-left px-2 py-1">Статус</th>
+                <th className="text-left px-2 py-1">Глобальный</th>
+                <th className="text-left px-2 py-1">Склады/Зоны</th>
+                <th className="text-left px-2 py-1 w-[90px]">Действия</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((u) => (
+                <React.Fragment key={u.id}>
+                  <tr className="border-t border-slate-100">
+                    <td className="px-2 py-1">@{u.username || "—"}</td>
+                    <td className="px-2 py-1">
+                      {[u.first_name, u.last_name].filter(Boolean).join(" ") || "—"}
+                    </td>
+                    <td className="px-2 py-1">{u.tg_user_id ?? "—"}</td>
+                    <td className="px-2 py-1">
+                      <select
+                        className="mrp-select"
+                        value={u.role}
+                        onChange={(e) => handleUpdate(u.id, { role: e.target.value as TgUser["role"] })}
+                      >
+                        <option value="controller">Контролёр</option>
+                        <option value="executor">Исполнитель</option>
+                      </select>
+                    </td>
+                    <td className="px-2 py-1">
+                      <select
+                        className="mrp-select"
+                        value={u.status}
+                        onChange={(e) => handleUpdate(u.id, { status: e.target.value as TgUser["status"] })}
+                      >
+                        <option value="pending">Ожидает</option>
+                        <option value="active">Активен</option>
+                        <option value="disabled">Отключён</option>
+                      </select>
+                    </td>
+                    <td className="px-2 py-1">
+                      <input
+                        type="checkbox"
+                        checked={u.is_global_controller}
+                        onChange={(e) => handleUpdate(u.id, { is_global_controller: e.target.checked })}
+                      />
+                    </td>
+                    <td className="px-2 py-1">
+                      <button
+                        className="mrp-btn mrp-btn--ghost mrp-btn--xs"
+                        onClick={() => setExpandedUserId(expandedUserId === u.id ? null : u.id)}
+                      >
+                        {expandedUserId === u.id ? "Скрыть" : "Настроить"}
+                      </button>
+                      <div className="text-xs text-slate-400 mt-1">
+                        {(bindings[u.id] || []).map(warehouseLabel).filter(Boolean).join(", ") || "—"}
+                      </div>
+                    </td>
+                    <td className="px-2 py-1">
+                      <button className="mrp-btn mrp-btn--ghost mrp-btn--xs" onClick={() => handleRemove(u.id)}>
+                        Удалить
+                      </button>
+                    </td>
+                  </tr>
+                  {expandedUserId === u.id && (
+                    <tr className="border-t border-slate-100 bg-slate-50/40">
+                      <td colSpan={8} className="px-3 py-3">
+                        <div className="text-xs text-slate-500 mb-2">Привязка к складам и зонам</div>
+                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                          {physical.map((p) => (
+                            <label key={p.id} className="flex items-center gap-2 text-sm">
+                              <input
+                                type="checkbox"
+                                checked={(bindings[u.id] || []).includes(p.id)}
+                                onChange={(e) => handleToggleWarehouse(u.id, p.id, e.target.checked)}
+                              />
+                              <span>{p.name}</span>
+                            </label>
+                          ))}
+                          {virtual.map((v) => {
+                            const parent = warehouses.find((w) => w.id === v.parentId);
+                            const label = parent ? `${parent.name} / ${v.name}` : v.name;
+                            return (
+                              <label key={v.id} className="flex items-center gap-2 text-sm">
+                                <input
+                                  type="checkbox"
+                                  checked={(bindings[u.id] || []).includes(v.id)}
+                                  onChange={(e) => handleToggleWarehouse(u.id, v.id, e.target.checked)}
+                                />
+                                <span>{label}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              ))}
+              {users.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="px-2 py-4 text-center text-slate-400">
+                    Пока нет пользователей
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
   );
 }
-
 function BalancesView() {
   const [materials] = useLocalState<Material[]>("mrp.materials.v1", []);
   const [products]  = useLocalState<Product[]>("mrp.products.v1", []);
@@ -2926,21 +3617,54 @@ function ProdReportsView() {
     dateISO: string;
     qty: number;
     status: string;
+    kind: "fg" | "semi" | "scrap";
+    typeLabel: string;
     product?: { code: string; name: string };
+    itemId: string;
     physWarehouseId: string;
-    fgZoneId: string;
-    matZoneId: string;
+    fgZoneId?: string;
+    matZoneId?: string;
+    semiZoneId?: string | null;
+    planKind?: "fg" | "semi" | null;
+    planItemId?: string | null;
+    planDate?: string | null;
+    reason?: string | null;
+    baseReportId?: string | null;
+    actorName?: string | null;
   };
   type WarehouseMap = Record<string, { id: string; name: string; type: "physical" | "virtual"; parentId?: string | null }>;
+  type UserMap = Record<string, { id: string; label: string }>;
 
   const [reports, setReports] = useState<ReportRow[]>([]);
   const [warehouses, setWarehouses] = useState<WarehouseMap>({});
+  const [users, setUsers] = useState<UserMap>({});
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [sortState, setSortState] = useState<{
     key: "number" | "product";
     dir: "asc" | "desc";
   }>({ key: "number", dir: "desc" });
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  const [adjustRow, setAdjustRow] = useState<ReportRow | null>(null);
+  const [adjustQty, setAdjustQty] = useState("");
+  const [adjustReason, setAdjustReason] = useState("");
+  const [adjustActorId, setAdjustActorId] = useState("");
+  const [adjustSaving, setAdjustSaving] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createType, setCreateType] = useState<"fg" | "semi" | "scrap">("fg");
+  const [createDate, setCreateDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [createQty, setCreateQty] = useState("");
+  const [createItemId, setCreateItemId] = useState("");
+  const [createPhysId, setCreatePhysId] = useState("");
+  const [createFgZoneId, setCreateFgZoneId] = useState("");
+  const [createMatZoneId, setCreateMatZoneId] = useState("");
+  const [createSemiZoneId, setCreateSemiZoneId] = useState("");
+  const [createLinkPlan, setCreateLinkPlan] = useState(true);
+  const [createActorId, setCreateActorId] = useState("");
+  const [createSaving, setCreateSaving] = useState(false);
+  const [items, setItems] = useState<{ id: string; code: string; name: string; kind: string }[]>([]);
+  const [itemsLoaded, setItemsLoaded] = useState(false);
+  const userOptions = React.useMemo(() => Object.values(users), [users]);
 
   const refreshWarehouses = useCallback(async () => {
     const { data, error } = await supabase
@@ -2962,10 +3686,27 @@ function ProdReportsView() {
     setWarehouses(map);
   }, []);
 
+  const refreshUsers = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("tg_users")
+      .select("id, username, first_name, last_name");
+    if (error) {
+      console.error("prodReports: load tg_users", error);
+      return;
+    }
+    const map: UserMap = {};
+    (data || []).forEach((row: any) => {
+      const name = [row.first_name, row.last_name].filter(Boolean).join(" ").trim();
+      const label = name || (row.username ? `@${row.username}` : "—");
+      map[row.id] = { id: row.id, label };
+    });
+    setUsers(map);
+  }, []);
+
   const refreshReports = useCallback(async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
+      const { data: prodData, error: prodError } = await supabase
         .from("prod_reports")
         .select(`
           id,
@@ -2973,36 +3714,175 @@ function ProdReportsView() {
           date_iso,
           qty,
           status,
+          plan_kind,
+          plan_item_id,
+          plan_date,
+          author_id,
+          product_id,
           phys_warehouse_id,
           fg_zone_id,
           mat_zone_id,
           product:product_id (code, name)
         `)
-        .order("date_iso", { ascending: false })
-        .limit(200);
-      if (error) throw error;
-      const mapped: ReportRow[] = (data || []).map((row: any) => ({
+        .order("date_iso", { ascending: false });
+      if (prodError) throw prodError;
+
+      const { data: scrapData, error: scrapError } = await supabase
+        .from("prod_scrap_reports")
+        .select(`
+          id,
+          number,
+          date_iso,
+          qty,
+          phys_warehouse_id,
+          mat_zone_id,
+          semi_zone_id,
+          item_id,
+          plan_kind,
+          plan_item_id,
+          plan_date,
+          author_id,
+          item:item_id (code, name)
+        `)
+        .order("date_iso", { ascending: false });
+      if (scrapError) throw scrapError;
+
+      const { data: adjProdData, error: adjProdError } = await supabase
+        .from("prod_report_adjustments")
+        .select(`
+          id,
+          report_id,
+          product_id,
+          delta_qty,
+          reason,
+          actor_id,
+          phys_warehouse_id,
+          fg_zone_id,
+          mat_zone_id,
+          plan_kind,
+          plan_item_id,
+          plan_date,
+          created_at,
+          product:product_id (code, name)
+        `)
+        .order("created_at", { ascending: false });
+      if (adjProdError) throw adjProdError;
+
+      const { data: adjScrapData, error: adjScrapError } = await supabase
+        .from("prod_scrap_adjustments")
+        .select(`
+          id,
+          report_id,
+          item_id,
+          delta_qty,
+          reason,
+          actor_id,
+          phys_warehouse_id,
+          mat_zone_id,
+          semi_zone_id,
+          plan_kind,
+          plan_item_id,
+          plan_date,
+          created_at,
+          item:item_id (code, name)
+        `)
+        .order("created_at", { ascending: false });
+      if (adjScrapError) throw adjScrapError;
+
+      const mappedProd: ReportRow[] = (prodData || []).map((row: any) => ({
         id: row.id,
         number: row.number,
         dateISO: row.date_iso,
         qty: Number(row.qty) || 0,
         status: row.status ?? "posted",
+        kind: row.plan_kind === "semi" ? "semi" : "fg",
+        typeLabel: row.plan_kind === "semi" ? "Производство полуфабрикатов" : "Производство товара",
+        itemId: row.product_id,
         physWarehouseId: row.phys_warehouse_id,
         fgZoneId: row.fg_zone_id,
         matZoneId: row.mat_zone_id,
+        planKind: row.plan_kind ?? null,
+        planItemId: row.plan_item_id ?? null,
+        planDate: row.plan_date ?? null,
         product: row.product ? { code: row.product.code, name: row.product.name } : undefined,
+        reason: null,
+        baseReportId: row.id,
+        actorName: users[row.author_id]?.label ?? "—",
       }));
-      setReports(mapped);
+      const mappedScrap: ReportRow[] = (scrapData || []).map((row: any) => ({
+        id: row.id,
+        number: row.number,
+        dateISO: row.date_iso,
+        qty: Number(row.qty) || 0,
+        status: "posted",
+        kind: "scrap",
+        typeLabel: "Брак",
+        itemId: row.item_id,
+        physWarehouseId: row.phys_warehouse_id,
+        matZoneId: row.mat_zone_id,
+        semiZoneId: row.semi_zone_id,
+        planKind: row.plan_kind ?? null,
+        planItemId: row.plan_item_id ?? null,
+        planDate: row.plan_date ?? null,
+        product: row.item ? { code: row.item.code, name: row.item.name } : undefined,
+        reason: null,
+        baseReportId: row.id,
+        actorName: users[row.author_id]?.label ?? "—",
+      }));
+      const mappedAdjProd: ReportRow[] = (adjProdData || []).map((row: any) => ({
+        id: row.id,
+        number: `ADJ-${String(row.report_id || row.id).slice(0, 6).toUpperCase()}`,
+        dateISO: row.created_at ?? row.plan_date ?? row.plan_date,
+        qty: Number(row.delta_qty) || 0,
+        status: "adjustment",
+        kind: row.plan_kind === "semi" ? "semi" : "fg",
+        typeLabel: "Корректировка производства",
+        itemId: row.product_id,
+        physWarehouseId: row.phys_warehouse_id,
+        fgZoneId: row.fg_zone_id,
+        matZoneId: row.mat_zone_id,
+        planKind: row.plan_kind ?? null,
+        planItemId: row.plan_item_id ?? null,
+        planDate: row.plan_date ?? null,
+        product: row.product ? { code: row.product.code, name: row.product.name } : undefined,
+        reason: row.reason ?? null,
+        baseReportId: row.report_id ?? null,
+        actorName: users[row.actor_id]?.label ?? "—",
+      }));
+      const mappedAdjScrap: ReportRow[] = (adjScrapData || []).map((row: any) => ({
+        id: row.id,
+        number: `ADJ-${String(row.report_id || row.id).slice(0, 6).toUpperCase()}`,
+        dateISO: row.created_at ?? row.plan_date ?? row.plan_date,
+        qty: Number(row.delta_qty) || 0,
+        status: "adjustment",
+        kind: "scrap",
+        typeLabel: "Корректировка брака",
+        itemId: row.item_id,
+        physWarehouseId: row.phys_warehouse_id,
+        matZoneId: row.mat_zone_id,
+        semiZoneId: row.semi_zone_id,
+        planKind: row.plan_kind ?? null,
+        planItemId: row.plan_item_id ?? null,
+        planDate: row.plan_date ?? null,
+        product: row.item ? { code: row.item.code, name: row.item.name } : undefined,
+        reason: row.reason ?? null,
+        baseReportId: row.report_id ?? null,
+        actorName: users[row.actor_id]?.label ?? "—",
+      }));
+      setReports([...mappedAdjProd, ...mappedAdjScrap, ...mappedProd, ...mappedScrap]);
     } catch (err) {
       console.error("prodReports: load reports", err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [users]);
 
   useEffect(() => {
     refreshWarehouses();
   }, [refreshWarehouses]);
+  useEffect(() => {
+    refreshUsers();
+  }, [refreshUsers]);
   useEffect(() => {
     refreshReports();
   }, [refreshReports]);
@@ -3023,7 +3903,9 @@ function ProdReportsView() {
     return (
       r.number.toLowerCase().includes(q) ||
       r.product?.code.toLowerCase().includes(q) ||
-      r.product?.name.toLowerCase().includes(q)
+      r.product?.name.toLowerCase().includes(q) ||
+      r.typeLabel.toLowerCase().includes(q) ||
+      (r.reason ?? "").toLowerCase().includes(q)
     );
   });
 
@@ -3057,6 +3939,181 @@ function ProdReportsView() {
     );
   }, [filtered, sortState]);
 
+  const openAdjust = (row: ReportRow) => {
+    if (row.status === "adjustment") {
+      alert("Корректировки нельзя корректировать.");
+      return;
+    }
+    setAdjustRow(row);
+    setAdjustQty(String(row.qty));
+    setAdjustReason("");
+    setAdjustActorId(userOptions[0]?.id ?? "");
+    setAdjustOpen(true);
+  };
+
+  const submitAdjust = async () => {
+    if (!adjustRow) return;
+    if (adjustRow.status === "adjustment") {
+      alert("Корректировки нельзя корректировать.");
+      return;
+    }
+    if (!adjustActorId) {
+      alert("Выберите автора корректировки.");
+      return;
+    }
+    const nextQty = Number(adjustQty);
+    if (!Number.isFinite(nextQty) || nextQty < 0) {
+      alert("Укажите корректное количество.");
+      return;
+    }
+    const delta = nextQty - adjustRow.qty;
+    if (delta === 0) {
+      setAdjustOpen(false);
+      return;
+    }
+    setAdjustSaving(true);
+    try {
+      if (adjustRow.kind === "scrap") {
+        const { error } = await supabase.rpc("adjust_production_scrap", {
+          p_delta_qty: delta,
+          p_item_id: adjustRow.itemId,
+          p_phys_warehouse_id: adjustRow.physWarehouseId,
+          p_mat_zone_id: adjustRow.matZoneId,
+          p_semi_zone_id: adjustRow.semiZoneId ?? null,
+          p_plan_kind: adjustRow.planKind ?? null,
+          p_plan_item_id: adjustRow.planItemId ?? null,
+          p_plan_date: adjustRow.planDate ?? null,
+          p_report_id: adjustRow.baseReportId ?? adjustRow.id,
+          p_reason: adjustReason || null,
+          p_actor_id: adjustActorId,
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.rpc("adjust_production_report", {
+          p_delta_qty: delta,
+          p_product_id: adjustRow.itemId,
+          p_phys_warehouse_id: adjustRow.physWarehouseId,
+          p_fg_zone_id: adjustRow.fgZoneId,
+          p_mat_zone_id: adjustRow.matZoneId,
+          p_plan_kind: adjustRow.planKind ?? null,
+          p_plan_item_id: adjustRow.planItemId ?? null,
+          p_plan_date: adjustRow.planDate ?? null,
+          p_report_id: adjustRow.baseReportId ?? adjustRow.id,
+          p_reason: adjustReason || null,
+          p_actor_id: adjustActorId,
+        });
+        if (error) throw error;
+      }
+      await refreshReports();
+      setAdjustOpen(false);
+    } catch (err) {
+      console.error("prodReports: adjust", err);
+      alert("Не удалось выполнить корректировку. См. консоль.");
+    } finally {
+      setAdjustSaving(false);
+    }
+  };
+
+  const ensureItems = useCallback(async () => {
+    if (itemsLoaded) return;
+    const { data, error } = await supabase
+      .from("items")
+      .select("id, code, name, kind")
+      .order("name", { ascending: true });
+    if (error) {
+      console.error("prodReports: load items", error);
+      return;
+    }
+    setItems((data || []).map((row: any) => ({ id: row.id, code: row.code, name: row.name, kind: row.kind })));
+    setItemsLoaded(true);
+  }, [itemsLoaded]);
+
+  const openCreate = async () => {
+    await ensureItems();
+    const physList = Object.values(warehouses).filter((w) => w.type === "physical");
+    const defaultPhys = physList[0]?.id ?? "";
+    setCreatePhysId(defaultPhys);
+    const zones = Object.values(warehouses).filter((w) => w.type === "virtual" && w.parentId === defaultPhys);
+    const findZoneId = (pattern: RegExp) => zones.find((z) => pattern.test(z.name))?.id || zones[0]?.id || "";
+    setCreateMatZoneId(findZoneId(/материал/i));
+    setCreateFgZoneId(findZoneId(/готов/i));
+    setCreateSemiZoneId(findZoneId(/полуфаб/i));
+    setCreateActorId(userOptions[0]?.id ?? "");
+    setCreateOpen(true);
+  };
+
+  const submitCreate = async () => {
+    const qty = Number(createQty);
+    if (!createItemId) {
+      alert("Выберите позицию.");
+      return;
+    }
+    if (!Number.isFinite(qty) || qty <= 0) {
+      alert("Укажите корректное количество.");
+      return;
+    }
+    if (!createPhysId) {
+      alert("Выберите склад.");
+      return;
+    }
+    if (!createActorId) {
+      alert("Выберите автора отчёта.");
+      return;
+    }
+    if (createType === "scrap") {
+      if (!createMatZoneId) {
+        alert("Выберите зону материалов.");
+        return;
+      }
+    } else {
+      if (!createFgZoneId || !createMatZoneId) {
+        alert("Выберите зоны.");
+        return;
+      }
+    }
+    setCreateSaving(true);
+    try {
+      if (createType === "scrap") {
+        const { error } = await supabase.rpc("post_production_scrap", {
+          p_number: "",
+          p_date_iso: createDate,
+          p_item_id: createItemId,
+          p_qty: qty,
+          p_phys_warehouse_id: createPhysId,
+          p_mat_zone_id: createMatZoneId,
+          p_semi_zone_id: createSemiZoneId || null,
+          p_plan_kind: createLinkPlan ? (createType === "scrap" ? null : createType) : null,
+          p_plan_item_id: createLinkPlan ? createItemId : null,
+          p_plan_date: createLinkPlan ? createDate : null,
+          p_actor_id: createActorId,
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.rpc("post_production_report", {
+          p_number: "",
+          p_date_iso: createDate,
+          p_product_id: createItemId,
+          p_qty: qty,
+          p_phys_warehouse_id: createPhysId,
+          p_fg_zone_id: createFgZoneId,
+          p_mat_zone_id: createMatZoneId,
+          p_plan_kind: createLinkPlan ? createType : null,
+          p_plan_item_id: createLinkPlan ? createItemId : null,
+          p_plan_date: createLinkPlan ? createDate : null,
+          p_actor_id: createActorId,
+        });
+        if (error) throw error;
+      }
+      await refreshReports();
+      setCreateOpen(false);
+    } catch (err) {
+      console.error("prodReports: create manual", err);
+      alert("Не удалось создать документ. См. консоль.");
+    } finally {
+      setCreateSaving(false);
+    }
+  };
+
   return (
     <div className="mrp-page">
       <div className="mrp-card">
@@ -3064,6 +4121,9 @@ function ProdReportsView() {
           <div className="mrp-toolbar__left">
             <button className="mrp-btn mrp-btn--ghost" onClick={refreshReports} disabled={loading}>
               {loading ? "Обновляем…" : "Обновить"}
+            </button>
+            <button className="mrp-btn mrp-btn--primary" onClick={openCreate}>
+              Создать вручную
             </button>
             <span className="text-xs text-slate-500">
               Документы создаются автоматически при вводе факта в «Плане партии».
@@ -3095,9 +4155,13 @@ function ProdReportsView() {
                 <th className="text-left px-3 py-2 wbwh-sortable" onClick={() => handleSort("product")}>
                   Товар{sortArrows("product")}
                 </th>
+                <th className="text-left px-3 py-2 w-[160px]">Тип</th>
                 <th className="text-left px-3 py-2 w-[90px]">Кол-во</th>
                 <th className="text-left px-3 py-2">Склад (ГП / Мат.)</th>
                 <th className="text-left px-3 py-2 w-[120px]">Статус</th>
+                <th className="text-left px-3 py-2 w-[200px]">Причина</th>
+                <th className="text-left px-3 py-2 w-[140px]">Автор</th>
+                <th className="text-left px-3 py-2 w-[140px]">Действия</th>
               </tr>
             </thead>
             <tbody>
@@ -3117,10 +4181,26 @@ function ProdReportsView() {
                       </span>
                     </div>
                   </td>
-                  <td className="px-3 py-2">{d.qty}</td>
                   <td className="px-3 py-2">
-                    <div>ГП: {fmtZone(d.fgZoneId) || "—"}</div>
-                    <div className="text-xs text-slate-500">Мат.: {fmtZone(d.matZoneId) || "—"}</div>
+                    <span className="text-slate-700">{d.typeLabel}</span>
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className={d.status === "adjustment" ? (d.qty > 0 ? "text-emerald-600" : "text-rose-600") : ""}>
+                      {d.status === "adjustment" && d.qty > 0 ? `+${d.qty}` : d.qty}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2">
+                    {d.kind === "scrap" ? (
+                      <>
+                        <div>Мат.: {fmtZone(d.matZoneId) || "—"}</div>
+                        <div className="text-xs text-slate-500">ПФ: {fmtZone(d.semiZoneId) || "—"}</div>
+                      </>
+                    ) : (
+                      <>
+                        <div>ГП: {fmtZone(d.fgZoneId) || "—"}</div>
+                        <div className="text-xs text-slate-500">Мат.: {fmtZone(d.matZoneId) || "—"}</div>
+                      </>
+                    )}
                   </td>
                   <td className="px-3 py-2">
                     <span
@@ -3130,14 +4210,36 @@ function ProdReportsView() {
                           : "mrp-status"
                       }
                     >
-                      {d.status === "posted" ? "Проведён" : d.status === "draft" ? "Черновик" : d.status}
+                      {d.status === "posted"
+                        ? "Проведён"
+                        : d.status === "draft"
+                          ? "Черновик"
+                          : d.status === "adjustment"
+                            ? "Корректировка"
+                            : d.status}
                     </span>
+                  </td>
+                  <td className="px-3 py-2">
+                    {d.reason || "—"}
+                  </td>
+                  <td className="px-3 py-2">
+                    {d.actorName || "—"}
+                  </td>
+                  <td className="px-3 py-2">
+                    <button
+                      className="mrp-btn mrp-btn--ghost mrp-btn--xs"
+                      onClick={() => openAdjust(d)}
+                      disabled={d.status === "adjustment"}
+                      title={d.status === "adjustment" ? "Корректировки нельзя корректировать" : "Корректировать"}
+                    >
+                      Корректировать
+                    </button>
                   </td>
                 </tr>
               ))}
               {sorted.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-3 py-6 text-center text-slate-400">
+                  <td colSpan={9} className="px-3 py-6 text-center text-slate-400">
                     Документы не найдены
                   </td>
                 </tr>
@@ -3146,6 +4248,229 @@ function ProdReportsView() {
           </table>
         </div>
       </div>
+      {adjustOpen && adjustRow && (
+        <Modal onClose={() => setAdjustOpen(false)} title="Корректировка отчёта" width={420}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (adjustSaving) return;
+              submitAdjust();
+            }}
+          >
+            <div className="form-row">
+              <Label>Новое количество</Label>
+              <input
+                className="form-control w-full"
+                type="number"
+                inputMode="decimal"
+                value={adjustQty}
+                onChange={(e) => setAdjustQty(e.target.value)}
+                min="0"
+              />
+            </div>
+            <div className="form-row mt-3">
+              <Label>Автор</Label>
+              <select
+                className="form-control w-full"
+                value={adjustActorId}
+                onChange={(e) => setAdjustActorId(e.target.value)}
+              >
+                <option value="">— выбрать —</option>
+                {userOptions.map((u) => (
+                  <option key={u.id} value={u.id}>{u.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-row mt-3">
+              <Label>Причина (опционально)</Label>
+              <input
+                className="form-control w-full"
+                value={adjustReason}
+                onChange={(e) => setAdjustReason(e.target.value)}
+                placeholder="Например: пересчёт, ошибка ввода"
+              />
+            </div>
+            <div className="modal-footer">
+              <div className="flex items-center justify-end gap-2 w-full">
+                <button type="button" className="mrp-btn" onClick={() => setAdjustOpen(false)}>
+                  Отмена
+                </button>
+                <button type="submit" className="mrp-btn mrp-btn--primary" disabled={adjustSaving}>
+                  {adjustSaving ? "Сохраняем…" : "Применить"}
+                </button>
+              </div>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {createOpen && (
+        <Modal onClose={() => setCreateOpen(false)} title="Ручной отчёт производства" width={520}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (createSaving) return;
+              submitCreate();
+            }}
+          >
+            <div className="form-row">
+              <Label>Тип документа</Label>
+              <select
+                className="form-control w-full"
+                value={createType}
+                onChange={(e) => setCreateType(e.target.value as any)}
+              >
+                <option value="fg">Производство товара</option>
+                <option value="semi">Производство полуфабрикатов</option>
+                <option value="scrap">Брак</option>
+              </select>
+            </div>
+            <div className="form-row mt-3">
+              <Label>Дата</Label>
+              <input
+                className="form-control w-full"
+                type="date"
+                value={createDate}
+                onChange={(e) => setCreateDate(e.target.value)}
+              />
+            </div>
+            <div className="form-row mt-3">
+              <Label>Позиция</Label>
+              <select
+                className="form-control w-full"
+                value={createItemId}
+                onChange={(e) => setCreateItemId(e.target.value)}
+              >
+                <option value="">— выбрать —</option>
+                {items
+                  .filter((it) =>
+                    createType === "fg" ? it.kind === "product" : createType === "semi" ? it.kind === "semi" : it.kind === "product" || it.kind === "semi"
+                  )
+                  .map((it) => (
+                    <option key={it.id} value={it.id}>
+                      {it.code} — {it.name}
+                    </option>
+                  ))}
+              </select>
+            </div>
+            <div className="form-row mt-3">
+              <Label>Количество</Label>
+              <input
+                className="form-control w-full"
+                type="number"
+                inputMode="decimal"
+                value={createQty}
+                onChange={(e) => setCreateQty(e.target.value)}
+                min="0"
+              />
+            </div>
+            <div className="form-row mt-3">
+              <Label>Автор</Label>
+              <select
+                className="form-control w-full"
+                value={createActorId}
+                onChange={(e) => setCreateActorId(e.target.value)}
+              >
+                <option value="">— выбрать —</option>
+                {userOptions.map((u) => (
+                  <option key={u.id} value={u.id}>{u.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-row mt-3">
+              <Label>Склад (физический)</Label>
+              <select
+                className="form-control w-full"
+                value={createPhysId}
+                onChange={(e) => {
+                  const pid = e.target.value;
+                  setCreatePhysId(pid);
+                  const zones = Object.values(warehouses).filter((w) => w.type === "virtual" && w.parentId === pid);
+                  const findZoneId = (pattern: RegExp) => zones.find((z) => pattern.test(z.name))?.id || zones[0]?.id || "";
+                  setCreateMatZoneId(findZoneId(/материал/i));
+                  setCreateFgZoneId(findZoneId(/готов/i));
+                  setCreateSemiZoneId(findZoneId(/полуфаб/i));
+                }}
+              >
+                <option value="">— выбрать —</option>
+                {Object.values(warehouses)
+                  .filter((w) => w.type === "physical")
+                  .map((w) => (
+                    <option key={w.id} value={w.id}>{w.name}</option>
+                  ))}
+              </select>
+            </div>
+            {createType !== "scrap" && (
+              <div className="form-row mt-3">
+                <Label>Зона выпуска</Label>
+                <select
+                  className="form-control w-full"
+                  value={createFgZoneId}
+                  onChange={(e) => setCreateFgZoneId(e.target.value)}
+                >
+                  <option value="">— выбрать —</option>
+                  {Object.values(warehouses)
+                    .filter((w) => w.type === "virtual" && w.parentId === createPhysId)
+                    .map((w) => (
+                      <option key={w.id} value={w.id}>{w.name}</option>
+                    ))}
+                </select>
+              </div>
+            )}
+            <div className="form-row mt-3">
+              <Label>Зона материалов</Label>
+              <select
+                className="form-control w-full"
+                value={createMatZoneId}
+                onChange={(e) => setCreateMatZoneId(e.target.value)}
+              >
+                <option value="">— выбрать —</option>
+                {Object.values(warehouses)
+                  .filter((w) => w.type === "virtual" && w.parentId === createPhysId)
+                  .map((w) => (
+                    <option key={w.id} value={w.id}>{w.name}</option>
+                  ))}
+              </select>
+            </div>
+            {createType === "scrap" && (
+              <div className="form-row mt-3">
+                <Label>Зона полуфабрикатов (если требуется)</Label>
+                <select
+                  className="form-control w-full"
+                  value={createSemiZoneId}
+                  onChange={(e) => setCreateSemiZoneId(e.target.value)}
+                >
+                  <option value="">— не использовать —</option>
+                  {Object.values(warehouses)
+                    .filter((w) => w.type === "virtual" && w.parentId === createPhysId)
+                    .map((w) => (
+                      <option key={w.id} value={w.id}>{w.name}</option>
+                    ))}
+                </select>
+              </div>
+            )}
+            <div className="form-row mt-3">
+              <label className="row-inline text-sm">
+                <input
+                  type="checkbox"
+                  checked={createLinkPlan}
+                  onChange={(e) => setCreateLinkPlan(e.target.checked)}
+                />
+                Привязать к плану на эту дату
+              </label>
+            </div>
+            <div className="modal-footer">
+              <div className="flex items-center justify-end gap-2 w-full">
+                <button type="button" className="mrp-btn" onClick={() => setCreateOpen(false)}>
+                  Отмена
+                </button>
+                <button type="submit" className="mrp-btn mrp-btn--primary" disabled={createSaving}>
+                  {createSaving ? "Создаём…" : "Создать"}
+                </button>
+              </div>
+            </div>
+          </form>
+        </Modal>
+      )}
     </div>
   );
 }

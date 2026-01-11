@@ -246,10 +246,10 @@ export function WbWarehousesView() {
           <p className="subtitle">Доступные склады и типы упаковки по каждому баркоду.</p>
         </div>
         <div className="actions">
-          <button className="app-pill app-pill--md" onClick={() => loadAcceptance()} disabled={fetching || loading}>
+          <button className="mrp-btn mrp-btn--primary" onClick={() => loadAcceptance()} disabled={fetching || loading}>
             {fetching ? "Проверка WB…" : "Проверить WB"}
           </button>
-          <button className="app-pill app-pill--md" onClick={handleSyncSkus} disabled={syncingSkus || loading}>
+          <button className="mrp-btn mrp-btn--primary" onClick={handleSyncSkus} disabled={syncingSkus || loading}>
             {syncingSkus ? "Синхр. SKU WB…" : "Синхр. SKU WB"}
           </button>
         </div>
