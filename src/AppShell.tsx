@@ -2295,20 +2295,6 @@ export default function AppShell() {
   const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
-  const authBypass = useMemo(() => {
-    if (import.meta.env.VITE_DISABLE_AUTH === "1") return true;
-    if (typeof window === "undefined") return false;
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("auth") === "off") {
-      localStorage.setItem("mrp.authBypass", "1");
-      return true;
-    }
-    if (params.get("auth") === "on") {
-      localStorage.removeItem("mrp.authBypass");
-      return false;
-    }
-    return localStorage.getItem("mrp.authBypass") === "1";
-  }, []);
 
   const [activeSectionKey, setActiveSectionKey] = useLocalState<string>("mrp.activeSection", nav[0]?.key ?? "mfg");
   const currentSection = useMemo(
@@ -2415,7 +2401,7 @@ export default function AppShell() {
 
   const pill = (isActive?: boolean) => `app-pill app-pill--md ${isActive ? "is-active" : ""}`;
 
-  if (authLoading && !session && !authBypass) {
+  if (authLoading && !session) {
     return (
       <div className="mrp-auth">
         <div className="mrp-auth-card">Загрузка...</div>
@@ -2423,7 +2409,7 @@ export default function AppShell() {
     );
   }
 
-  if (!session && !authBypass) {
+  if (!session) {
     return (
       <AuthView
         mode={authMode}
@@ -2442,7 +2428,7 @@ export default function AppShell() {
     );
   }
 
-  if (profile && !profile.is_active && !authBypass) {
+  if (profile && !profile.is_active) {
     return (
       <div className="mrp-auth">
         <div className="mrp-auth-card">
