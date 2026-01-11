@@ -207,11 +207,11 @@ export function MarketplacesView() {
       const historySelectFallback =
         "id, source_plan_id, channel_id, destination_id, item_id, plan_date, qty, shipment_name, external_supply_id, status, archived_at, restored_at, canceled_at";
 
-      let plansRes = await supabase
+      let plansRes: any = await supabase
         .from("mp_supply_plans")
         .select(plansSelectFull)
         .eq("status", "planned");
-      let historyRes = await supabase
+      let historyRes: any = await supabase
         .from("mp_supply_plans_history")
         .select(historySelectFull)
         .order("archived_at", { ascending: false });
