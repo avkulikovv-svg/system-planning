@@ -51,6 +51,9 @@ const SUPPLY_ORDER_STATES = {
 };
 const WB_STATUS_IDS_DEFAULT = [1, 2, 3, 4, 5, 6];
 const WB_SHIPPED_STATUS_IDS = new Set([4, 5, 6]);
+const WB_SUPPLY_SYNC_DAYS = Number(Deno.env.get("WB_SUPPLY_SYNC_DAYS") ?? "30");
+const WB_SUPPLY_SYNC_LOOKAHEAD_DAYS = Number(Deno.env.get("WB_SUPPLY_SYNC_LOOKAHEAD_DAYS") ?? "30");
+const WB_TIMEZONE = "Europe/Moscow";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -107,6 +110,35 @@ const parseDateOnly = (raw?: string) => {
   }
   if (Number.isNaN(d.getTime())) return null;
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+};
+
+const extractDateISO = (raw?: string) => {
+  const s = (raw ?? "").trim();
+  if (!s) return null;
+  const m = s.match(/(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
+};
+
+const getDefaultPhysicalWarehouseId = async () => {
+  const { data: defaultWh, error: defaultErr } = await supabase
+    .from("warehouses")
+    .select("id")
+    .eq("type", "physical")
+    .eq("is_default", true)
+    .limit(1)
+    .maybeSingle();
+  if (defaultErr) throw defaultErr;
+  if (defaultWh?.id) return defaultWh.id;
+
+  const { data: whData, error: whErr } = await supabase
+    .from("warehouses")
+    .select("id")
+    .eq("type", "physical")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (whErr) throw whErr;
+  return whData?.id ?? null;
 };
 
 const pickBarcode = (it: Record<string, unknown>) => {
@@ -874,15 +906,7 @@ const syncOzonSupplyPlans = async () => {
     }
 
     if (shippedPlans.length) {
-      const { data: whData, error: whErr } = await supabase
-        .from("warehouses")
-        .select("id")
-        .eq("type", "physical")
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      if (whErr) throw whErr;
-      const warehouseId = whData?.id;
+      const warehouseId = await getDefaultPhysicalWarehouseId();
 
       if (warehouseId) {
         const planIds = shippedPlans.map((p) => p.id);
@@ -1015,15 +1039,7 @@ const syncOzonSupplyPlans = async () => {
   }
 
   if (shippedRows.length) {
-    const { data: whData, error: whErr } = await supabase
-      .from("warehouses")
-      .select("id")
-      .eq("type", "physical")
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    if (whErr) throw whErr;
-    const warehouseId = whData?.id;
+    const warehouseId = await getDefaultPhysicalWarehouseId();
     if (warehouseId) {
       const shippedByExt = new Map<string, string[]>();
       for (const row of shippedRows) {
@@ -1211,11 +1227,26 @@ const syncWbSupplyPlans = async (statusIds: number[]) => {
   const channelId = await fetchChannelId("WB");
   const destMap = await fetchDestinationsMap(channelId);
 
-  const today = new Date();
-  const from = new Date(today.getTime() - 365 * 24 * 60 * 60 * 1000);
-  const fromDate = from.toISOString().slice(0, 10);
-  const tillDate = today.toISOString().slice(0, 10);
+  const formatDateMsk = (d: Date) =>
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: WB_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(d);
 
+  const today = new Date();
+  const windowDays = Number.isFinite(WB_SUPPLY_SYNC_DAYS) && WB_SUPPLY_SYNC_DAYS > 0 ? WB_SUPPLY_SYNC_DAYS : 30;
+  const lookaheadDays =
+    Number.isFinite(WB_SUPPLY_SYNC_LOOKAHEAD_DAYS) && WB_SUPPLY_SYNC_LOOKAHEAD_DAYS >= 0
+      ? WB_SUPPLY_SYNC_LOOKAHEAD_DAYS
+      : 30;
+  const from = new Date(today.getTime() - windowDays * 24 * 60 * 60 * 1000);
+  const till = new Date(today.getTime() + lookaheadDays * 24 * 60 * 60 * 1000);
+  const fromDate = formatDateMsk(from);
+  const tillDate = formatDateMsk(till);
+
+  logStep("wb supplies window", { fromDate, tillDate, windowDays, lookaheadDays, tz: WB_TIMEZONE });
   const supplies = await listWbSupplies(statusIds, fromDate, tillDate, "createDate");
   if (!supplies.length) return { imported: 0, skipped: 0, unknown: 0 };
 
@@ -1296,9 +1327,11 @@ const syncWbSupplyPlans = async (statusIds: number[]) => {
   let unknown = 0;
 
   for (const row of supplyItems) {
-    const planDate = parseDateOnly(row.info?.supplyDate || row.info?.createDate);
-    if (!planDate) continue;
-    const planDateISO = planDate.toISOString().slice(0, 10);
+    const planDateISO =
+      extractDateISO(row.info?.supplyDate) ||
+      extractDateISO(row.info?.createDate) ||
+      (parseDateOnly(row.info?.supplyDate || row.info?.createDate)?.toISOString().slice(0, 10) ?? null);
+    if (!planDateISO) continue;
     const boxTypeId = pickBoxTypeId(row.info) ?? row.listBoxTypeId ?? null;
 
     const whId = String(row.info?.warehouseID ?? row.info?.warehouseId ?? "").trim();
@@ -1401,15 +1434,7 @@ const syncWbSupplyPlans = async (statusIds: number[]) => {
       }
 
       if (shippedPlans.length) {
-        const { data: whData, error: whErr } = await supabase
-          .from("warehouses")
-          .select("id")
-          .eq("type", "physical")
-          .order("created_at", { ascending: true })
-          .limit(1)
-          .maybeSingle();
-        if (whErr) throw whErr;
-        const warehouseId = whData?.id;
+        const warehouseId = await getDefaultPhysicalWarehouseId();
         if (warehouseId) {
           const planIds = shippedPlans.map((p) => p.id);
           const { data: existingMoves, error: moveErr } = await supabase
@@ -1494,15 +1519,7 @@ const syncWbSupplyPlans = async (statusIds: number[]) => {
     }
 
     if (shippedPlans.length) {
-      const { data: whData, error: whErr } = await supabase
-        .from("warehouses")
-        .select("id")
-        .eq("type", "physical")
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      if (whErr) throw whErr;
-      const warehouseId = whData?.id;
+      const warehouseId = await getDefaultPhysicalWarehouseId();
       if (warehouseId) {
         const planIds = shippedPlans.map((p) => p.id);
         const { data: existingMoves, error: moveErr } = await supabase

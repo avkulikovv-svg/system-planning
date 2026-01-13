@@ -1064,23 +1064,24 @@ React.useEffect(() => {
   );
 
   /* ---- планы и параметры диапазона ---- */
-const [planMapFG]   = useLocalState<Record<string, Record<string, number>>>("mrp.plan.fg.planMap.v1", {});
-const [planMapSEMI] = useLocalState<Record<string, Record<string, number>>>("mrp.plan.semi.planMap.v1", {});
+const [planMapFG, setPlanMapFG] = useLocalState<Record<string, Record<string, number>>>("mrp.plan.fg.planMap.v1", {});
+const [planMapSEMI, setPlanMapSEMI] = useLocalState<Record<string, Record<string, number>>>("mrp.plan.semi.planMap.v1", {});
 const [planStartISO] = useLocalState<string>("mrp.plan.startISO", new Date().toISOString().slice(0,10));
-const [planDays]     = useLocalState<number>("mrp.plan.days", 14);
+const [planDaysDefault] = useLocalState<number>("mrp.plan.days", 14);
+const [coverDays, setCoverDays] = useLocalState<number>("mrp.materials.cover.days", planDaysDefault);
 const [rtl]          = useLocalState<boolean>("mrp.plan.rtl", true);
 
 // диапазон дат как в Плане (UI-порядок)
 const range = React.useMemo(() => {
   const base = new Date(planStartISO + "T00:00:00");
   const list: string[] = [];
-  for (let i = 0; i < planDays; i++) {
+  for (let i = 0; i < coverDays; i++) {
     const d = new Date(base);
     d.setDate(d.getDate() + i);
     list.push(d.toISOString().slice(0,10));
   }
   return rtl ? list.reverse() : list;
-}, [planStartISO, planDays, rtl]);
+}, [planStartISO, coverDays, rtl]);
 
 // хронологический порядок (от ранних к поздним) — для расчётов
 const chronoAsc = React.useMemo(() => {
@@ -1093,6 +1094,48 @@ const today = React.useMemo(() => {
   d.setHours(0,0,0,0);
   return d.toISOString().slice(0,10);
 }, []);
+
+const loadPlans = React.useCallback(async () => {
+  const physTarget = physId || physDefault;
+  if (!physTarget || !range.length) return;
+  const ordered = [...range].sort();
+  const startDate = ordered[0];
+  const endDate = ordered[ordered.length - 1];
+
+  const load = async (table: "plans_fg" | "plans_semi", idColumn: "product_id" | "semi_id") => {
+    const { data, error } = await supabase
+      .from(table)
+      .select(`${idColumn}, phys_warehouse_id, date_iso, qty`)
+      .gte("date_iso", startDate)
+      .lte("date_iso", endDate)
+      .eq("phys_warehouse_id", physTarget);
+    if (error) {
+      console.error("load plans", error);
+      return null;
+    }
+    const map: Record<string, Record<string, number>> = {};
+    (data || []).forEach((row: any) => {
+      const id = row[idColumn];
+      const d = row.date_iso;
+      const v = Number(row.qty) || 0;
+      if (!id || !d) return;
+      if (!map[id]) map[id] = {};
+      map[id][d] = v;
+    });
+    return map;
+  };
+
+  const [fg, semi] = await Promise.all([
+    load("plans_fg", "product_id"),
+    load("plans_semi", "semi_id"),
+  ]);
+  if (fg) setPlanMapFG(fg);
+  if (semi) setPlanMapSEMI(semi);
+}, [physId, physDefault, range, setPlanMapFG, setPlanMapSEMI]);
+
+React.useEffect(() => {
+  loadPlans();
+}, [loadPlans]);
 
 /* ---- материалы на единицу из спеки (без рекурсии) ---- */
 const perUnitMatForProduct = React.useCallback((productId: string) => {
@@ -1478,6 +1521,19 @@ const saveForm = async (
           </div>
 
           <div className="mrp-toolbar__right">
+            <div className="mrp-field">
+              <span className="mrp-field__label">План, дней</span>
+              <input
+                type="number"
+                className="mrp-input num-compact"
+                value={coverDays}
+                onChange={(e) =>
+                  setCoverDays(
+                    Math.min(365, Math.max(1, Number(e.target.value) || 1)),
+                  )
+                }
+              />
+            </div>
             <div className="mrp-field">
               <span className="mrp-field__label">Склад</span>
               <select

@@ -120,6 +120,7 @@ type Warehouse = {
   type: "physical" | "virtual";
   parentId?: string | null;       // для virtual — id физ. склада
   isActive: boolean;
+  isDefault: boolean;
 };
 
 type StockBalance = {
@@ -1331,7 +1332,7 @@ function ProductsView() {
   const loadWarehouses = useCallback(async () => {
     const { data, error } = await supabase
       .from("warehouses")
-      .select("id, name, type, parent_id, is_active")
+      .select("id, name, type, parent_id, is_active, is_default")
       .order("name", { ascending: true });
     if (error) {
       console.error("ProductsView load warehouses", error);
@@ -1344,6 +1345,7 @@ function ProductsView() {
         type: row.type === "physical" ? "physical" : "virtual",
         parentId: row.parent_id,
         isActive: row.is_active ?? true,
+        isDefault: row.is_default ?? false,
       }))
     );
   }, []);
@@ -1586,18 +1588,27 @@ function ProductsView() {
     return lookup;
   }, [warehouses]);
 
+  const warehouseTypeById: Record<string, Warehouse["type"]> = React.useMemo(() => {
+    const lookup: Record<string, Warehouse["type"]> = {};
+    warehouses.forEach((w) => {
+      lookup[w.id] = w.type;
+    });
+    return lookup;
+  }, [warehouses]);
+
   const stockByPhysical = React.useMemo(() => {
     const res = new Map<string, Map<string, number>>();
     physicalWarehouses.forEach((phys) => res.set(phys.id, new Map()));
     for (const row of stockRows) {
       if (!productIds.has(row.itemId)) continue;
-      const physId = parentByWarehouse[row.warehouseId];
+      const whType = warehouseTypeById[row.warehouseId];
+      const physId = whType === "physical" ? row.warehouseId : parentByWarehouse[row.warehouseId];
       if (!physId || !res.has(physId)) continue;
       const map = res.get(physId)!;
       map.set(row.itemId, (map.get(row.itemId) ?? 0) + row.qty);
     }
     return res;
-  }, [stockRows, physicalWarehouses, parentByWarehouse, productIds]);
+  }, [stockRows, physicalWarehouses, parentByWarehouse, productIds, warehouseTypeById]);
 
   const updateStockColumn = (index: number, value: string) => {
     setStockColumns((prev) => prev.map((id, idx) => (idx === index ? value : id)));
@@ -2458,9 +2469,39 @@ export default function AppShell() {
       <MenuIcon className="w-5 h-5" />
     </button>
     {!collapsed && (
-      <div className="ml-2 flex items-center gap-2 font-semibold tracking-tight">
-        <span className="mrp-logo">◆</span>
-        <span>MRP‑lite</span>
+      <div className="ml-2 flex items-center gap-2">
+        <svg
+          width="200"
+          height="38"
+          viewBox="0 0 200 38"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+          aria-label="NORMIA"
+        >
+          <rect x="0" y="2" width="3" height="34" fill="#6C63FF" />
+          <text
+            x="12"
+            y="18"
+            fontFamily="Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+            fontSize="20"
+            fontWeight="600"
+            letterSpacing="1.5"
+            fill="#E8ECFF"
+          >
+            NORMIA
+          </text>
+          <text
+            x="12"
+            y="35"
+            fontFamily="Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+            fontSize="11"
+            fontWeight="500"
+            letterSpacing="0.4"
+            fill="#9AA3C7"
+          >
+            Системное управление
+          </text>
+        </svg>
       </div>
     )}
   </div>
@@ -3040,6 +3081,7 @@ function SettingsWarehouses() {
     renameWarehouse,
     updateWarehouse,
     deleteWarehouse,
+    setDefaultWarehouse,
   } = useSupabaseWarehouses();
   const [balances] = useStockBalances();
 
@@ -3127,6 +3169,7 @@ function SettingsWarehouses() {
           <thead className="bg-slate-50 text-slate-500">
             <tr>
               <th className="text-left px-2 py-1 w-[180px]">Физический склад</th>
+              <th className="text-left px-2 py-1 w-[110px]">Основной</th>
               <th className="text-left px-2 py-1 w-[160px]">TG чат ID</th>
               <th className="text-left px-2 py-1">Зоны (виртуальные)</th>
               <th className="text-left px-2 py-1 w-[90px]">Действия</th>
@@ -3139,6 +3182,17 @@ function SettingsWarehouses() {
                 <tr key={p.id} className="border-t border-slate-100 align-top">
                   <td className="px-2 py-1">
                     <div className="font-medium">{p.name}</div>
+                  </td>
+                  <td className="px-2 py-1">
+                    <label className="flex items-center gap-2 text-xs text-slate-600">
+                      <input
+                        type="radio"
+                        name="default-warehouse"
+                        checked={p.isDefault}
+                        onChange={() => setDefaultWarehouse(p.id)}
+                      />
+                      По умолчанию
+                    </label>
                   </td>
                   <td className="px-2 py-1">
                     <div className="flex items-center gap-2">
@@ -3177,7 +3231,7 @@ function SettingsWarehouses() {
                 </tr>
               );
             })}
-            {physical.length === 0 && <tr><td colSpan={4} className="px-2 py-4 text-center text-slate-400">Пока нет складов</td></tr>}
+            {physical.length === 0 && <tr><td colSpan={5} className="px-2 py-4 text-center text-slate-400">Пока нет складов</td></tr>}
           </tbody>
         </table>
         </div>

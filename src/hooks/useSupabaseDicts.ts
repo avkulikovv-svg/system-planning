@@ -314,6 +314,7 @@ export type WarehouseRecord = {
   tgChatId: string | null;
   tgSendTime: string | null;
   isActive: boolean;
+  isDefault: boolean;
 };
 
 const mapWarehouseRow = (row: any): WarehouseRecord => ({
@@ -325,6 +326,7 @@ const mapWarehouseRow = (row: any): WarehouseRecord => ({
   tgChatId: row.tg_chat_id ?? null,
   tgSendTime: row.tg_send_time ?? null,
   isActive: row.is_active ?? true,
+  isDefault: row.is_default ?? false,
 });
 
 export function useSupabaseWarehouses() {
@@ -336,7 +338,7 @@ export function useSupabaseWarehouses() {
     try {
       const { data, error } = await supabase
         .from("warehouses")
-        .select("id, name, type, parent_id, legacy_id, tg_chat_id, tg_send_time, is_active")
+        .select("id, name, type, parent_id, legacy_id, tg_chat_id, tg_send_time, is_active, is_default")
         .order("name", { ascending: true });
       if (error) throw error;
       setWarehouses((data || []).map(mapWarehouseRow));
@@ -364,7 +366,7 @@ export function useSupabaseWarehouses() {
             parent_id: payload.parentId ?? null,
             legacy_id: payload.legacyId ?? null,
           })
-          .select("id, name, type, parent_id, legacy_id, tg_chat_id, tg_send_time, is_active")
+          .select("id, name, type, parent_id, legacy_id, tg_chat_id, tg_send_time, is_active, is_default")
           .single();
         if (error) throw error;
         const rec = mapWarehouseRow(data);
@@ -386,6 +388,7 @@ export function useSupabaseWarehouses() {
         name: string;
         parentId: string | null;
         isActive: boolean;
+        isDefault: boolean;
         legacyId: string | null;
         tgChatId: string | null;
         tgSendTime: string | null;
@@ -398,12 +401,13 @@ export function useSupabaseWarehouses() {
       if (patch.legacyId !== undefined) updates.legacy_id = patch.legacyId;
       if (patch.tgChatId !== undefined) updates.tg_chat_id = patch.tgChatId;
       if (patch.tgSendTime !== undefined) updates.tg_send_time = patch.tgSendTime;
+      if (patch.isDefault !== undefined) updates.is_default = patch.isDefault;
       try {
         const { data, error } = await supabase
           .from("warehouses")
           .update(updates)
           .eq("id", id)
-          .select("id, name, type, parent_id, legacy_id, tg_chat_id, tg_send_time, is_active")
+          .select("id, name, type, parent_id, legacy_id, tg_chat_id, tg_send_time, is_active, is_default")
           .single();
         if (error) throw error;
         const rec = mapWarehouseRow(data);
@@ -462,6 +466,30 @@ export function useSupabaseWarehouses() {
     [updateWarehouse]
   );
 
+  const setDefaultWarehouse = useCallback(
+    async (id: string | null) => {
+      try {
+        const { error: clearErr } = await supabase
+          .from("warehouses")
+          .update({ is_default: false })
+          .eq("type", "physical");
+        if (clearErr) throw clearErr;
+        if (id) {
+          const { error: setErr } = await supabase
+            .from("warehouses")
+            .update({ is_default: true })
+            .eq("id", id);
+          if (setErr) throw setErr;
+        }
+        await refresh();
+      } catch (error) {
+        console.error("Failed to set default warehouse", error);
+        alert("Не удалось обновить склад по умолчанию");
+      }
+    },
+    [refresh]
+  );
+
   return {
     warehouses,
     physical,
@@ -477,5 +505,6 @@ export function useSupabaseWarehouses() {
     updateWarehouse,
     deleteWarehouse,
     setWarehouseActive,
+    setDefaultWarehouse,
   };
 }

@@ -1,5 +1,6 @@
 // file: src/views/PlanGridView.tsx
 import React from "react";
+import { Search } from "lucide-react";
 import { supabase } from "../api/supabaseClient";
 import { useSupabaseWarehouses } from "../hooks/useSupabaseDicts";
 
@@ -517,6 +518,22 @@ function PlanGridView() {
   const [factMapSEMI, setFactMapSEMI] = React.useState<PlanMap>({});
   const [scrapMapSEMI, setScrapMapSEMI] = React.useState<PlanMap>({});
 
+  React.useEffect(() => {
+    try {
+      localStorage.setItem("mrp.plan.fg.planMap.v1", JSON.stringify(planMapFG));
+    } catch (err) {
+      console.warn("planMapFG persist failed", err);
+    }
+  }, [planMapFG]);
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem("mrp.plan.semi.planMap.v1", JSON.stringify(planMapSEMI));
+    } catch (err) {
+      console.warn("planMapSEMI persist failed", err);
+    }
+  }, [planMapSEMI]);
+
   const updatePlanLocal = React.useCallback((kind: "fg" | "semi", id: string, dateISO: string, val: number) => {
     if (kind === "fg") {
       setPlanMapFG((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), [dateISO]: val } }));
@@ -629,7 +646,9 @@ function PlanGridView() {
           .map((sid) => {
             const one = Number(semiNeed[sid] || 0);
             const need = one * val;
-            const have = getQty("semi", sid, semiZoneIdForPhys);
+            const haveBase = getQty("semi", sid, semiZoneIdForPhys) + plannedSemiUpTo(sid, dateISO);
+            const reserved = plannedSemiUsedUpTo(sid, dateISO, { id, dateISO });
+            const have = Math.max(0, haveBase - reserved);
             const deficit = Math.max(0, need - have);
             return { sid, one, need, have, deficit, lead: Number(semiMap[sid]?.leadDays ?? 0) };
           })
@@ -681,6 +700,7 @@ function PlanGridView() {
     return Array.from(set).sort();
   }, [scope, products, semis]);
   const [catFilter, setCatFilter] = useLocalState<string>("mrp.plan.cat", "");
+  const [planSearch, setPlanSearch] = useLocalState<string>("mrp.plan.search", "");
   React.useEffect(() => {
     if (catFilter && !availableCats.includes(catFilter)) setCatFilter("");
   }, [availableCats, catFilter, setCatFilter]);
@@ -708,16 +728,19 @@ function PlanGridView() {
   };
   // строки
   const rows = React.useMemo(() => {
+    const q = planSearch.trim().toLowerCase();
     if (scope === "fg") {
       let base = products.filter((p) => p.status !== "archived");
       if (catFilter) base = base.filter((p) => (p.category || "") === catFilter);
+      if (q) base = base.filter((p) => (p.code || "").toLowerCase().includes(q) || (p.name || "").toLowerCase().includes(q));
       return base;
     } else {
       let base = semis.filter((s) => s.status !== "archived");
       if (catFilter) base = base.filter((s) => (s.category || "") === catFilter);
+      if (q) base = base.filter((s) => (s.code || "").toLowerCase().includes(q) || (s.name || "").toLowerCase().includes(q));
       return base;
     }
-  }, [scope, products, semis, catFilter]);
+  }, [scope, products, semis, catFilter, planSearch]);
 
   const sortedRows = React.useMemo(() => {
     const dir = sortState.dir === "asc" ? 1 : -1;
@@ -729,21 +752,6 @@ function PlanGridView() {
       getValue(a).localeCompare(getValue(b), "ru", { sensitivity: "base" }) * dir
     );
   }, [rows, sortState]);
-
-  // итоги
-  const totals = React.useMemo(() => {
-    const res: Record<string, { plan: number; fact: number; scrap: number }> = {};
-    for (const d of range) res[d] = { plan: 0, fact: 0, scrap: 0 };
-    for (const r of rows) {
-      const id = r.id!;
-      for (const d of range) {
-        res[d].plan += Number(planMap[id]?.[d] || 0);
-        res[d].fact += Number(factMap[id]?.[d] || 0);
-        res[d].scrap += Number(scrapMap[id]?.[d] || 0);
-      }
-    }
-    return res;
-  }, [rows, range, planMap, factMap, scrapMap]);
 
   // спецификация по item
   const specFor = (id: string | undefined, code: string | undefined) => {
@@ -791,6 +799,36 @@ function PlanGridView() {
     return map;
   }, [scope, products, semis, specs]);
 
+  const plannedSemiUpTo = React.useCallback(
+    (sid: string, dateISO: string) => {
+      const byDate = planMapSEMI[sid] || {};
+      let sum = 0;
+      for (const [d, q] of Object.entries(byDate)) {
+        if (d <= dateISO) sum += Number(q) || 0;
+      }
+      return sum;
+    },
+    [planMapSEMI]
+  );
+
+  const plannedSemiUsedUpTo = React.useCallback(
+    (sid: string, dateISO: string, exclude?: { id: string; dateISO: string }) => {
+      let sum = 0;
+      for (const [fgId, byDate] of Object.entries(planMapFG)) {
+        const per = perUnitById[fgId];
+        const one = Number(per?.semi?.[sid] || 0);
+        if (one <= 0) continue;
+        for (const [d, q] of Object.entries(byDate || {})) {
+          if (d > dateISO) continue;
+          if (exclude && fgId === exclude.id && d === exclude.dateISO) continue;
+          sum += one * (Number(q) || 0);
+        }
+      }
+      return sum;
+    },
+    [planMapFG, perUnitById]
+  );
+
   type CovCell = { ok: boolean; canMake: number; title: string };
   const coverage: Record<string, Record<string, CovCell>> = React.useMemo(() => {
     const res: Record<string, Record<string, CovCell>> = {};
@@ -820,13 +858,49 @@ function PlanGridView() {
     for (const r of pool) {
       const id = r.id!;
       res[id] = {};
+    }
 
-      const per = perUnitById[id] || { mat: {}, semi: {} };
-      const hasSpec = !!specExistsById[id] && (Object.keys(per.mat).length > 0 || Object.keys(per.semi).length > 0);
+    const planSemiByDate = new Map<string, Map<string, number>>();
+    if (scope === "fg") {
+      for (const [sid, byDate] of Object.entries(planMapSEMI)) {
+        for (const [d, q] of Object.entries(byDate || {})) {
+          const qty = Number(q) || 0;
+          if (qty <= 0) continue;
+          let bucket = planSemiByDate.get(d);
+          if (!bucket) {
+            bucket = new Map();
+            planSemiByDate.set(d, bucket);
+          }
+          bucket.set(sid, (bucket.get(sid) || 0) + qty);
+        }
+      }
+    }
 
-      for (const d of futureDays) {
+    const addPlannedSemiForDate = (d: string) => {
+      const bucket = planSemiByDate.get(d);
+      if (!bucket) return;
+      for (const [sid, qty] of bucket.entries()) {
+        setSemi(sid, qtySemi(sid) + qty);
+      }
+    };
+
+    if (futureDays.length > 0 && scope === "fg") {
+      const firstDay = futureDays[0];
+      for (const [d] of planSemiByDate.entries()) {
+        if (d < firstDay) addPlannedSemiForDate(d);
+      }
+    }
+
+    for (const d of futureDays) {
+      if (scope === "fg") addPlannedSemiForDate(d);
+
+      for (const r of pool) {
+        const id = r.id!;
         const plan = Number(planMap[id]?.[d] || 0);
         if (plan <= 0) continue;
+
+        const per = perUnitById[id] || { mat: {}, semi: {} };
+        const hasSpec = !!specExistsById[id] && (Object.keys(per.mat).length > 0 || Object.keys(per.semi).length > 0);
 
         const fact = Number(factMap[id]?.[d] || 0);
         const overdue = isOverduePlan(d, todayISO) && fact <= 0;
@@ -903,7 +977,7 @@ function PlanGridView() {
 
     return res;
   }, [
-    rows, range, todayISO, planMap, factMap, scrapMap,
+    rows, range, todayISO, planMap, factMap, scrapMap, planMapSEMI, scope,
     perUnitById, specExistsById,
     matZoneIdForPhys, fgZoneIdForPhys, semiZoneIdForPhys,
     getQty, fmtShort, semiMap,
@@ -1235,12 +1309,22 @@ function PlanGridView() {
                 ))}
               </select>
             </div>
+            <div className="mrp-search-input mrp-search-input--compact">
+              <Search className="w-4 h-4" />
+              <input
+                type="search"
+                placeholder="План партии: код / наименование"
+                value={planSearch}
+                onChange={(e) => setPlanSearch(e.target.value)}
+              />
+            </div>
           </div>
         </div>
 
         {/* таблица */}
-        <div className="mrp-hscroll">
-          <table className="mrp-table text-sm table-compact plangrid">
+        <div className="mrp-hscroll mrp-hscroll--sticky">
+          <div className="mrp-hscroll__inner">
+            <table className="mrp-table text-sm table-compact plangrid">
             <colgroup>
               <col style={{ width: "var(--code-w)" }} />
               <col style={{ width: "var(--name-w)" }} />
@@ -1422,24 +1506,8 @@ function PlanGridView() {
               )}
             </tbody>
 
-            <tfoot>
-              <tr className="border-t border-slate-200">
-                <td className="code-col font-medium px-2 py-2" style={{ left: 0, background: "#fff" }}>
-                  Итого по дню
-                </td>
-                <td className="name-col px-2 py-2" style={{ left: "var(--code-w)", background: "#fff" }}></td>
-                <td className="fg-col px-2 py-2" style={{ left: "calc(var(--code-w) + var(--name-w))", background: "#fff" }}></td>
-                <td className="metric-col px-2 py-2" style={{ left: "calc(var(--code-w) + var(--name-w) + var(--fg-w))", background: "#fff" }}></td>
-                {range.map((d) => (
-                  <td key={d} className="date-col px-2 py-2">
-                  <div className="text-sm font-semibold">{totals[d].plan}</div>
-                  <div className="text-sm text-slate-600">{totals[d].fact}</div>
-                  <div className="text-xs text-slate-400">Брак: {totals[d].scrap}</div>
-                  </td>
-                ))}
-              </tr>
-            </tfoot>
-          </table>
+            </table>
+          </div>
         </div>
       </div>
     </div>
