@@ -1205,6 +1205,48 @@ function ProductForm({
 /* ===================== PRODUCTS VIEW ===================== */
 function ProductsView() {
   type StockRow = { itemId: string; warehouseId: string; qty: number };
+  type ProductsCache = {
+    items?: Product[];
+    warehouses?: Warehouse[];
+    stockRows?: StockRow[];
+    tsItems?: number;
+    tsWarehouses?: number;
+    tsStock?: number;
+  };
+  const PRODUCTS_CACHE_KEY = "mrp.products.cache.v1";
+  const PRODUCTS_CACHE_STATIC_TTL = 30 * 60 * 1000;
+  const PRODUCTS_CACHE_DYNAMIC_TTL = 2 * 60 * 1000;
+  const readProductsCache = (): ProductsCache | null => {
+    try {
+      const raw = localStorage.getItem(PRODUCTS_CACHE_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw) as ProductsCache;
+    } catch {
+      return null;
+    }
+  };
+  const writeProductsCache = (patch: Partial<ProductsCache>) => {
+    const now = Date.now();
+    const current = readProductsCache() || {};
+    const next: ProductsCache = { ...current, ...patch };
+    if (patch.items) next.tsItems = now;
+    if (patch.warehouses) next.tsWarehouses = now;
+    if (patch.stockRows) next.tsStock = now;
+    try {
+      localStorage.setItem(PRODUCTS_CACHE_KEY, JSON.stringify(next));
+    } catch {}
+  };
+  const isProductsStaticFresh = (
+    cache: ProductsCache | null,
+    key: "items" | "warehouses"
+  ) => {
+    const ts = key === "items" ? cache?.tsItems : cache?.tsWarehouses;
+    return typeof ts === "number" && Date.now() - ts < PRODUCTS_CACHE_STATIC_TTL;
+  };
+  const isProductsDynamicFresh = (cache: ProductsCache | null) => {
+    const ts = cache?.tsStock;
+    return typeof ts === "number" && Date.now() - ts < PRODUCTS_CACHE_DYNAMIC_TTL;
+  };
   const [items, setItems] = useLocalState<Product[]>("mrp.products.v1", []);
   const [stockRows, setStockRows] = useState<StockRow[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
@@ -1330,6 +1372,11 @@ function ProductsView() {
   };
 
   const loadWarehouses = useCallback(async () => {
+    const cache = readProductsCache();
+    if (isProductsStaticFresh(cache, "warehouses") && Array.isArray(cache?.warehouses)) {
+      setWarehouses(cache.warehouses);
+      return;
+    }
     const { data, error } = await supabase
       .from("warehouses")
       .select("id, name, type, parent_id, is_active, is_default")
@@ -1338,19 +1385,24 @@ function ProductsView() {
       console.error("ProductsView load warehouses", error);
       return;
     }
-    setWarehouses(
-      (data || []).map((row: any) => ({
-        id: row.id,
-        name: row.name,
-        type: row.type === "physical" ? "physical" : "virtual",
-        parentId: row.parent_id,
-        isActive: row.is_active ?? true,
-        isDefault: row.is_default ?? false,
-      }))
-    );
+    const mapped = (data || []).map((row: any) => ({
+      id: row.id,
+      name: row.name,
+      type: row.type === "physical" ? "physical" : "virtual",
+      parentId: row.parent_id,
+      isActive: row.is_active ?? true,
+      isDefault: row.is_default ?? false,
+    }));
+    setWarehouses(mapped);
+    writeProductsCache({ warehouses: mapped });
   }, []);
 
-  const loadStockBalances = useCallback(async () => {
+  const loadStockBalances = useCallback(async (force = false) => {
+    const cache = readProductsCache();
+    if (!force && isProductsDynamicFresh(cache) && Array.isArray(cache?.stockRows)) {
+      setStockRows(cache.stockRows);
+      return;
+    }
     const { data, error } = await supabase
       .from("stock_balances")
       .select("item_id, warehouse_id, qty");
@@ -1358,16 +1410,21 @@ function ProductsView() {
       console.error("ProductsView load stock_balances", error);
       return;
     }
-    setStockRows(
-      (data || []).map((row: any) => ({
-        itemId: row.item_id,
-        warehouseId: row.warehouse_id,
-        qty: Number(row.qty) || 0,
-      }))
-    );
+    const mapped = (data || []).map((row: any) => ({
+      itemId: row.item_id,
+      warehouseId: row.warehouse_id,
+      qty: Number(row.qty) || 0,
+    }));
+    setStockRows(mapped);
+    writeProductsCache({ stockRows: mapped });
   }, []);
 
   const loadProducts = useCallback(async () => {
+    const cache = readProductsCache();
+    if (isProductsStaticFresh(cache, "items") && Array.isArray(cache?.items)) {
+      setItems(cache.items);
+      return;
+    }
     setLoading(true);
     try {
       const { data, error } = await supabase
@@ -1402,6 +1459,7 @@ function ProductsView() {
         palletWeight: row.pallet_weight ?? undefined,
       }));
       setItems(mapped);
+      writeProductsCache({ items: mapped });
     } catch (err) {
       console.error("ProductsView load products", err);
     } finally {
@@ -1420,7 +1478,7 @@ function ProductsView() {
 
   const refreshAll = () => {
     loadProducts();
-    loadStockBalances();
+    loadStockBalances(true);
   };
 
   const openCreate = () => {

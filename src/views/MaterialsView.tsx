@@ -86,6 +86,95 @@ function useLocalState<T>(key: string, initial: T) {
   return [state, setState] as const;
 }
 
+type MaterialsCache = {
+  materials?: Material[];
+  semis?: Semi[];
+  legacyToUuid?: Record<string, string>;
+  tsStatic?: number;
+};
+
+type MaterialsStockCache = {
+  stockByItem?: Record<string, number>;
+  ts?: number;
+};
+
+type MaterialsPlanCache = {
+  fg?: Record<string, Record<string, number>>;
+  semi?: Record<string, Record<string, number>>;
+  ts?: number;
+};
+
+const MATERIALS_ITEMS_CACHE_KEY = "mrp.materials.items.cache.v1";
+const MATERIALS_STOCK_CACHE_PREFIX = "mrp.materials.stock.cache.v1:";
+const MATERIALS_PLAN_CACHE_PREFIX = "mrp.materials.plan.cache.v1:";
+const MATERIALS_CACHE_STATIC_TTL = 30 * 60 * 1000;
+const MATERIALS_CACHE_DYNAMIC_TTL = 2 * 60 * 1000;
+
+const readMaterialsItemsCache = (): MaterialsCache | null => {
+  try {
+    const raw = localStorage.getItem(MATERIALS_ITEMS_CACHE_KEY);
+    return raw ? (JSON.parse(raw) as MaterialsCache) : null;
+  } catch {
+    return null;
+  }
+};
+
+const writeMaterialsItemsCache = (patch: MaterialsCache) => {
+  const prev = readMaterialsItemsCache() || {};
+  const next: MaterialsCache = {
+    ...prev,
+    ...patch,
+    legacyToUuid: { ...(prev.legacyToUuid || {}), ...(patch.legacyToUuid || {}) },
+  };
+  try {
+    localStorage.setItem(MATERIALS_ITEMS_CACHE_KEY, JSON.stringify(next));
+  } catch {
+    // ignore cache write errors
+  }
+};
+
+const isMaterialsItemsFresh = (cache?: MaterialsCache | null) => {
+  if (!cache?.tsStatic) return false;
+  return Date.now() - cache.tsStatic < MATERIALS_CACHE_STATIC_TTL;
+};
+
+const readMaterialsStockCache = (key: string): MaterialsStockCache | null => {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as MaterialsStockCache) : null;
+  } catch {
+    return null;
+  }
+};
+
+const writeMaterialsStockCache = (key: string, patch: MaterialsStockCache) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(patch));
+  } catch {
+    // ignore cache write errors
+  }
+};
+
+const isMaterialsDynamicFresh = (ts?: number) =>
+  !!ts && Date.now() - ts < MATERIALS_CACHE_DYNAMIC_TTL;
+
+const readMaterialsPlanCache = (key: string): MaterialsPlanCache | null => {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as MaterialsPlanCache) : null;
+  } catch {
+    return null;
+  }
+};
+
+const writeMaterialsPlanCache = (key: string, patch: MaterialsPlanCache) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(patch));
+  } catch {
+    // ignore cache write errors
+  }
+};
+
 /* ========= Форма создания/редактирования (товар/материал) ========= */
 function MaterialForm({
   initial,
@@ -536,41 +625,63 @@ export default function MaterialsView() {
       ? setMaterialsAll(arr as Material[])
       : setSemisAll(arr as Semi[]);
 
-React.useEffect(() => {
-  const loadItems = async () => {
-    const currentKind = kind === "material" ? "material" : "semi";
+  React.useEffect(() => {
+    const loadItems = async () => {
+      const currentKind = kind === "material" ? "material" : "semi";
+      const cached = readMaterialsItemsCache();
 
-    const { data, error } = await supabase
-      .from("items")
-      .select("*")
-      .eq("kind", currentKind)
-      .order("name", { ascending: true });
-
-    if (error) {
-      console.error("Ошибка загрузки items из Supabase:", error);
-      return;
-    }
-
-    const mapped: BaseItem[] = (data || []).map(mapItemRow);
-
-    // карта legacy_id → uuid
-    const newMap: Record<string, string> = {};
-    (data || []).forEach((row: any) => {
-      if (row.legacy_id) {
-        newMap[row.legacy_id as string] = row.id as string;
+      if (isMaterialsItemsFresh(cached)) {
+        if (currentKind === "material" && cached?.materials?.length) {
+          setMaterialsAll(cached.materials);
+        }
+        if (currentKind === "semi" && cached?.semis?.length) {
+          setSemisAll(cached.semis);
+        }
+        if (cached?.legacyToUuid) {
+          setLegacyToUuid(cached.legacyToUuid);
+        }
+        if (
+          (currentKind === "material" && cached?.materials?.length) ||
+          (currentKind === "semi" && cached?.semis?.length)
+        ) {
+          return;
+        }
       }
-    });
-    setLegacyToUuid(newMap);
 
-    if (currentKind === "material") {
-      setMaterialsAll(mapped as Material[]);
-    } else {
-      setSemisAll(mapped as Semi[]);
-    }
-  };
+      const { data, error } = await supabase
+        .from("items")
+        .select("*")
+        .eq("kind", currentKind)
+        .order("name", { ascending: true });
 
-  loadItems();
-}, [kind]);
+      if (error) {
+        console.error("Ошибка загрузки items из Supabase:", error);
+        return;
+      }
+
+      const mapped: BaseItem[] = (data || []).map(mapItemRow);
+
+      // карта legacy_id → uuid
+      const newMap: Record<string, string> = {};
+      (data || []).forEach((row: any) => {
+        if (row.legacy_id) {
+          newMap[row.legacy_id as string] = row.id as string;
+        }
+      });
+      const mergedLegacy = { ...(cached?.legacyToUuid || {}), ...newMap };
+      setLegacyToUuid(mergedLegacy);
+
+      if (currentKind === "material") {
+        setMaterialsAll(mapped as Material[]);
+        writeMaterialsItemsCache({ materials: mapped as Material[], legacyToUuid: mergedLegacy, tsStatic: Date.now() });
+      } else {
+        setSemisAll(mapped as Semi[]);
+        writeMaterialsItemsCache({ semis: mapped as Semi[], legacyToUuid: mergedLegacy, tsStatic: Date.now() });
+      }
+    };
+
+    loadItems();
+  }, [kind, setMaterialsAll, setSemisAll]);
 
 
 
@@ -672,10 +783,18 @@ React.useEffect(() => {
   /* ---- остатки ---- */
   const [stockByItem, setStockByItem] = React.useState<Record<string, number>>({});
 
-  const refreshStockBalances = React.useCallback(async () => {
+  const refreshStockBalances = React.useCallback(async (force = false) => {
     if (!currentZoneUuid) {
       setStockByItem({});
       return;
+    }
+    const cacheKey = `${MATERIALS_STOCK_CACHE_PREFIX}${currentZoneUuid}`;
+    if (!force) {
+      const cached = readMaterialsStockCache(cacheKey);
+      if (cached?.stockByItem && isMaterialsDynamicFresh(cached.ts)) {
+        setStockByItem(cached.stockByItem);
+        return;
+      }
     }
     const { data, error } = await supabase
       .from("stock_balances")
@@ -693,6 +812,7 @@ React.useEffect(() => {
       map[row.item_id] = Number(row.qty) || 0;
     });
     setStockByItem(map);
+    writeMaterialsStockCache(cacheKey, { stockByItem: map, ts: Date.now() });
   }, [currentZoneUuid]);
 
   React.useEffect(() => {
@@ -894,7 +1014,7 @@ React.useEffect(() => {
         ],
       });
       setEdit(it.id!, { qty: "" });
-      await refreshStockBalances();
+      await refreshStockBalances(true);
     } catch (err: any) {
       console.error("Supabase post_receipt error:", err);
       alert("Ошибка Supabase (post_receipt): " + err.message);
@@ -965,7 +1085,7 @@ React.useEffect(() => {
 
         setEdit(it.id!, { qty: "" });
       }
-      await refreshStockBalances();
+      await refreshStockBalances(true);
     } catch (err: any) {
       console.error("Supabase postAll exception:", err);
       alert("Неожиданная ошибка при записи в Supabase, см. консоль.");
@@ -1101,6 +1221,13 @@ const loadPlans = React.useCallback(async () => {
   const ordered = [...range].sort();
   const startDate = ordered[0];
   const endDate = ordered[ordered.length - 1];
+  const cacheKey = `${MATERIALS_PLAN_CACHE_PREFIX}${physTarget}:${startDate}:${endDate}`;
+  const cached = readMaterialsPlanCache(cacheKey);
+  if (cached?.planMapFG && cached?.planMapSEMI && isMaterialsDynamicFresh(cached.ts)) {
+    setPlanMapFG(cached.planMapFG);
+    setPlanMapSEMI(cached.planMapSEMI);
+    return;
+  }
 
   const load = async (table: "plans_fg" | "plans_semi", idColumn: "product_id" | "semi_id") => {
     const { data, error } = await supabase
@@ -1131,6 +1258,13 @@ const loadPlans = React.useCallback(async () => {
   ]);
   if (fg) setPlanMapFG(fg);
   if (semi) setPlanMapSEMI(semi);
+  if (fg && semi) {
+    writeMaterialsPlanCache(cacheKey, {
+      planMapFG: fg,
+      planMapSEMI: semi,
+      ts: Date.now(),
+    });
+  }
 }, [physId, physDefault, range, setPlanMapFG, setPlanMapSEMI]);
 
 React.useEffect(() => {

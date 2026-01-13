@@ -25,6 +25,31 @@ type CategoryMap = {
 type SortKey = "code" | "name" | "category";
 type SortDir = "asc" | "desc";
 
+type WbItemsCache = { items: ItemRow[]; ts: number };
+const WB_ITEMS_CACHE_KEY = "mrp.wb.items.cache.v1";
+const WB_ITEMS_CACHE_TTL = 30 * 60 * 1000;
+
+const readWbItemsCache = (): WbItemsCache | null => {
+  try {
+    const raw = localStorage.getItem(WB_ITEMS_CACHE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as WbItemsCache;
+  } catch {
+    return null;
+  }
+};
+
+const isWbItemsFresh = (cache?: WbItemsCache | null) =>
+  !!cache?.ts && Date.now() - cache.ts < WB_ITEMS_CACHE_TTL;
+
+const writeWbItemsCache = (items: ItemRow[]) => {
+  try {
+    localStorage.setItem(WB_ITEMS_CACHE_KEY, JSON.stringify({ items, ts: Date.now() }));
+  } catch {
+    // ignore cache write errors
+  }
+};
+
 export function WbWarehousesView() {
   const [items, setItems] = React.useState<ItemRow[]>([]);
   const [options, setOptions] = React.useState<OptionsMap>({});
@@ -62,6 +87,12 @@ export function WbWarehousesView() {
   const loadItems = React.useCallback(async () => {
     setLoading(true);
     setError(null);
+    const cached = readWbItemsCache();
+    if (cached?.items && isWbItemsFresh(cached)) {
+      setItems(cached.items);
+      setLoading(false);
+      return cached.items;
+    }
     try {
       const { data, error: loadError } = await supabase
         .from("items")
@@ -75,6 +106,7 @@ export function WbWarehousesView() {
         mpCategoryWb: (row as any).mp_category_wb ?? null,
       })) as ItemRow[];
       setItems(rows);
+      writeWbItemsCache(rows);
       return rows;
     } catch (err: any) {
       console.error("load wb items", err);

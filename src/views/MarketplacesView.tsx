@@ -120,6 +120,158 @@ const formatDateShort = (iso: string) => {
   return `${dd}.${mm}`;
 };
 
+const MARKETPLACES_CACHE_KEY = "mrp.marketplaces.cache.v1";
+const MARKETPLACES_STATIC_TTL_MS = 30 * 60 * 1000;
+const MARKETPLACES_DYNAMIC_TTL_MS = 2 * 60 * 1000;
+
+type MarketplaceCachePayload = {
+  tsStatic: number;
+  tsDynamic: number;
+  channels: ChannelRow[];
+  destinations: DestinationRow[];
+  items: ItemRow[];
+  stock: Array<{ item_id: string; qty: number }>;
+  barcodes: Array<{ item_id: string; barcode: string; channel?: string | null; is_primary?: boolean }>;
+  plans: SupplyPlanRow[];
+  history: SupplyHistoryRow[];
+  hasSupplyBoxType: boolean;
+};
+
+const readMarketplacesCache = (): MarketplaceCachePayload | null => {
+  const raw = localStorage.getItem(MARKETPLACES_CACHE_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as MarketplaceCachePayload;
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+};
+
+const writeMarketplacesCache = (payload: MarketplaceCachePayload) => {
+  try {
+    localStorage.setItem(MARKETPLACES_CACHE_KEY, JSON.stringify(payload));
+  } catch {
+    // ignore cache errors (quota / privacy)
+  }
+};
+
+const buildMarketplaceState = (params: {
+  channels: ChannelRow[];
+  destinations: DestinationRow[];
+  items: ItemRow[];
+  stock: Array<{ item_id: string; qty: number }>;
+  barcodes: Array<{ item_id: string; barcode: string; channel?: string | null; is_primary?: boolean }>;
+  plans: SupplyPlanRow[];
+  history: SupplyHistoryRow[];
+}) => {
+  const channelById = new Map(params.channels.map((c) => [c.id, c]));
+  const destinationById = new Map(params.destinations.map((d) => [d.id, d]));
+  const ozonChannelId = params.channels.find((ch) => ch.code === "OZON")?.id ?? null;
+
+  const stockMap = new Map<string, number>();
+  for (const row of params.stock ?? []) {
+    const itemId = String(row.item_id);
+    stockMap.set(itemId, (stockMap.get(itemId) ?? 0) + Number(row.qty ?? 0));
+  }
+
+  const barcodeMap: Record<string, string> = {};
+  for (const row of params.barcodes ?? []) {
+    const itemId = String(row.item_id);
+    const barcode = String(row.barcode ?? "").trim();
+    if (!barcode) continue;
+    const isPrimary = Boolean(row.is_primary);
+    const isWb = String(row.channel ?? "").toLowerCase() === "wb";
+    const current = barcodeMap[itemId];
+    if (!current || isPrimary || isWb) {
+      barcodeMap[itemId] = barcode;
+    }
+  }
+
+  const columnMap = new Map<string, SupplyColumn>();
+  const matrixNext: Record<string, Record<string, number>> = {};
+
+  for (const plan of params.plans ?? []) {
+    const channel = channelById.get(plan.channel_id);
+    if (!channel) continue;
+    const colKey = `${channel.code}:${plan.external_supply_id ?? plan.shipment_name ?? plan.plan_date}`;
+    let col = columnMap.get(colKey);
+    if (!col) {
+      const destName = plan.destination_id ? destinationById.get(plan.destination_id)?.name : "";
+      const title = plan.shipment_name || destName || channel.name;
+      col = {
+        id: colKey,
+        channel: channel.code,
+        title,
+        subtitle: formatDateShort(plan.plan_date),
+        externalSupplyId: plan.external_supply_id ?? null,
+        destinationId: plan.destination_id ?? null,
+        supplyBoxTypeId: plan.supply_box_type_id ?? null,
+        planDate: plan.plan_date ?? null,
+      };
+      columnMap.set(colKey, col);
+    } else {
+      if (!col.destinationId && plan.destination_id) col.destinationId = plan.destination_id;
+      if (col.supplyBoxTypeId == null && plan.supply_box_type_id != null) {
+        col.supplyBoxTypeId = plan.supply_box_type_id;
+      }
+      if (!col.planDate && plan.plan_date) col.planDate = plan.plan_date;
+    }
+
+    if (!matrixNext[plan.item_id]) matrixNext[plan.item_id] = {};
+    matrixNext[plan.item_id][col.id] = (matrixNext[plan.item_id][col.id] ?? 0) + Number(plan.qty ?? 0);
+  }
+
+  const bucketedItems: MatrixItem[] = (params.items ?? []).map((row) => ({
+    id: row.id,
+    code: row.code ?? "",
+    name: row.name ?? "",
+    group: row.category ?? "Без категории",
+    bucket: row.category ?? "Без категории",
+    currentStock: stockMap.get(row.id) ?? 0,
+    barcode: row.barcode ?? null,
+    units_per_box: row.units_per_box ?? null,
+    unit_weight: row.unit_weight ?? null,
+    box_length: row.box_length ?? null,
+    box_width: row.box_width ?? null,
+    box_height: row.box_height ?? null,
+    box_weight: row.box_weight ?? null,
+    box_volume: row.box_volume ?? null,
+    box_orientation: row.box_orientation ?? null,
+    shelf_life_days: row.shelf_life_days ?? null,
+    shelf_life_required: row.shelf_life_required ?? null,
+  }));
+
+  const sortedColumns = Array.from(columnMap.values()).sort((a, b) => {
+    if (a.channel !== b.channel) return a.channel.localeCompare(b.channel, "ru");
+    if (a.subtitle !== b.subtitle) return a.subtitle.localeCompare(b.subtitle, "ru");
+    return a.title.localeCompare(b.title, "ru");
+  });
+
+  let lastUpdatedOzon: string | null = null;
+  if (ozonChannelId) {
+    let latest = 0;
+    for (const plan of params.plans ?? []) {
+      if (plan.channel_id !== ozonChannelId) continue;
+      const ts = Date.parse(plan.updated_at ?? "");
+      if (!Number.isNaN(ts)) latest = Math.max(latest, ts);
+    }
+    lastUpdatedOzon = latest ? new Date(latest).toLocaleString("ru-RU") : null;
+  }
+
+  return {
+    channelIdMap: Object.fromEntries(channelById.entries()),
+    destinations: params.destinations ?? [],
+    columns: sortedColumns,
+    items: bucketedItems,
+    matrix: matrixNext,
+    historyRows: params.history ?? [],
+    itemBarcodes: barcodeMap,
+    lastUpdatedOzon,
+  };
+};
+
 const formatDateRu = (iso: string) => {
   const d = new Date(`${iso}T00:00:00`);
   if (Number.isNaN(d.getTime())) return iso;
@@ -176,8 +328,37 @@ export function MarketplacesView() {
   const [hasSupplyBoxType, setHasSupplyBoxType] = React.useState(true);
 
   const loadData = React.useCallback(async () => {
-    setLoading(true);
     setError(null);
+    const cached = readMarketplacesCache();
+    const nowTs = Date.now();
+    const hasFreshStatic = Boolean(cached && nowTs - cached.tsStatic < MARKETPLACES_STATIC_TTL_MS);
+    const hasFreshDynamic = Boolean(cached && nowTs - cached.tsDynamic < MARKETPLACES_DYNAMIC_TTL_MS);
+    const usedCache = Boolean(cached && (hasFreshStatic || hasFreshDynamic));
+
+    if (usedCache && cached) {
+      const state = buildMarketplaceState({
+        channels: cached.channels ?? [],
+        destinations: cached.destinations ?? [],
+        items: cached.items ?? [],
+        stock: cached.stock ?? [],
+        barcodes: cached.barcodes ?? [],
+        plans: cached.plans ?? [],
+        history: cached.history ?? [],
+      });
+      setChannelIdMap(state.channelIdMap);
+      setColumns(state.columns);
+      setItems(state.items);
+      setMatrix(state.matrix);
+      setHistoryRows(state.historyRows);
+      setItemBarcodes(state.itemBarcodes);
+      setDestinations(state.destinations);
+      setLastUpdatedOzon(state.lastUpdatedOzon);
+      setHasSupplyBoxType(cached.hasSupplyBoxType);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
+
     try {
       const [channelsRes, destinationsRes, itemsRes, stockRes, barcodeRes] = await Promise.all([
         supabase.from("mp_channels").select("id, code, name"),
@@ -220,7 +401,9 @@ export function MarketplacesView() {
         (plansRes.error?.message || "").includes("supply_box_type_id") ||
         (historyRes.error?.message || "").includes("supply_box_type_id");
 
+      let hasSupplyBoxTypeNext = true;
       if (boxTypeError) {
+        hasSupplyBoxTypeNext = false;
         setHasSupplyBoxType(false);
         plansRes = await supabase
           .from("mp_supply_plans")
@@ -231,6 +414,7 @@ export function MarketplacesView() {
           .select(historySelectFallback)
           .order("archived_at", { ascending: false });
       } else {
+        hasSupplyBoxTypeNext = true;
         setHasSupplyBoxType(true);
       }
 
@@ -243,8 +427,6 @@ export function MarketplacesView() {
           code: (row.code as ChannelCode) ?? "CLIENT",
           name: row.name,
         })) ?? [];
-      const channelById = new Map(channels.map((c) => [c.id, c]));
-      setChannelIdMap(Object.fromEntries(channelById.entries()));
 
       const destinations: DestinationRow[] =
         destinationsRes.data?.map((row: any) => ({
@@ -253,110 +435,42 @@ export function MarketplacesView() {
           name: row.name,
           meta: row.meta ?? null,
         })) ?? [];
-      const destinationById = new Map(destinations.map((d) => [d.id, d]));
 
       const planRows: SupplyPlanRow[] = plansRes.data ?? [];
       const historyData: SupplyHistoryRow[] = historyRes.data ?? [];
       const itemRows: ItemRow[] = itemsRes.data ?? [];
-      const ozonChannelId = channels.find((ch) => ch.code === "OZON")?.id ?? null;
 
-      const stockMap = new Map<string, number>();
-      for (const row of stockRes.data ?? []) {
-        const itemId = String(row.item_id);
-        stockMap.set(itemId, (stockMap.get(itemId) ?? 0) + Number(row.qty ?? 0));
-      }
-
-      const barcodeMap: Record<string, string> = {};
-      for (const row of barcodeRes.data ?? []) {
-        const itemId = String(row.item_id);
-        const barcode = String(row.barcode ?? "").trim();
-        if (!barcode) continue;
-        const isPrimary = Boolean(row.is_primary);
-        const isWb = String(row.channel ?? "").toLowerCase() === "wb";
-        const current = barcodeMap[itemId];
-        if (!current || isPrimary || isWb) {
-          barcodeMap[itemId] = barcode;
-        }
-      }
-
-      const columnMap = new Map<string, SupplyColumn>();
-      const matrixNext: Record<string, Record<string, number>> = {};
-
-      for (const plan of planRows) {
-        const channel = channelById.get(plan.channel_id);
-        if (!channel) continue;
-        const colKey = `${channel.code}:${plan.external_supply_id ?? plan.shipment_name ?? plan.plan_date}`;
-        let col = columnMap.get(colKey);
-        if (!col) {
-          const destName = plan.destination_id ? destinationById.get(plan.destination_id)?.name : "";
-          const title = plan.shipment_name || destName || channel.name;
-          col = {
-            id: colKey,
-            channel: channel.code,
-            title,
-            subtitle: formatDateShort(plan.plan_date),
-            externalSupplyId: plan.external_supply_id ?? null,
-            destinationId: plan.destination_id ?? null,
-            supplyBoxTypeId: plan.supply_box_type_id ?? null,
-            planDate: plan.plan_date ?? null,
-          };
-          columnMap.set(colKey, col);
-        } else {
-          if (!col.destinationId && plan.destination_id) col.destinationId = plan.destination_id;
-          if (col.supplyBoxTypeId == null && plan.supply_box_type_id != null) {
-            col.supplyBoxTypeId = plan.supply_box_type_id;
-          }
-          if (!col.planDate && plan.plan_date) col.planDate = plan.plan_date;
-        }
-
-        if (!matrixNext[plan.item_id]) matrixNext[plan.item_id] = {};
-        matrixNext[plan.item_id][col.id] = (matrixNext[plan.item_id][col.id] ?? 0) + Number(plan.qty ?? 0);
-      }
-
-      const bucketedItems: MatrixItem[] = itemRows.map((row) => ({
-        id: row.id,
-        code: row.code ?? "",
-        name: row.name ?? "",
-        group: row.category ?? "Без категории",
-        bucket: row.category ?? "Без категории",
-        currentStock: stockMap.get(row.id) ?? 0,
-        barcode: row.barcode ?? null,
-        units_per_box: row.units_per_box ?? null,
-        unit_weight: row.unit_weight ?? null,
-        box_length: row.box_length ?? null,
-        box_width: row.box_width ?? null,
-        box_height: row.box_height ?? null,
-        box_weight: row.box_weight ?? null,
-        box_volume: row.box_volume ?? null,
-        box_orientation: row.box_orientation ?? null,
-        shelf_life_days: row.shelf_life_days ?? null,
-        shelf_life_required: row.shelf_life_required ?? null,
-      }));
-
-      const sortedColumns = Array.from(columnMap.values()).sort((a, b) => {
-        if (a.channel !== b.channel) return a.channel.localeCompare(b.channel, "ru");
-        if (a.subtitle !== b.subtitle) return a.subtitle.localeCompare(b.subtitle, "ru");
-        return a.title.localeCompare(b.title, "ru");
+      const state = buildMarketplaceState({
+        channels,
+        destinations,
+        items: itemRows,
+        stock: stockRes.data ?? [],
+        barcodes: barcodeRes.data ?? [],
+        plans: planRows,
+        history: historyData,
       });
 
-      if (ozonChannelId) {
-        let latest = 0;
-        for (const plan of planRows) {
-          if (plan.channel_id !== ozonChannelId) continue;
-          const ts = Date.parse(plan.updated_at ?? "");
-          if (!Number.isNaN(ts)) latest = Math.max(latest, ts);
-        }
-        setLastUpdatedOzon(latest ? new Date(latest).toLocaleString("ru-RU") : null);
-      } else {
-        setLastUpdatedOzon(null);
-      }
+      setChannelIdMap(state.channelIdMap);
+      setColumns(state.columns);
+      setItems(state.items);
+      setMatrix(state.matrix);
+      setHistoryRows(state.historyRows);
+      setItemBarcodes(state.itemBarcodes);
+      setDestinations(state.destinations);
+      setLastUpdatedOzon(state.lastUpdatedOzon);
 
-      setColumns(sortedColumns);
-      setItems(bucketedItems);
-      setMatrix(matrixNext);
-      setHistoryRows(historyData);
-      setItemBarcodes(barcodeMap);
-      setDestinations(destinations);
+      writeMarketplacesCache({
+        tsStatic: nowTs,
+        tsDynamic: nowTs,
+        channels,
+        destinations,
+        items: itemRows,
+        stock: stockRes.data ?? [],
+        barcodes: barcodeRes.data ?? [],
+        plans: planRows,
+        history: historyData,
+        hasSupplyBoxType: hasSupplyBoxTypeNext,
+      });
     } catch (err: any) {
       console.error("load marketplace plans", err);
       setError(err?.message ?? "Не удалось загрузить данные");

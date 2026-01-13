@@ -110,6 +110,42 @@ function useLocalState<T>(key: string, initial: T) {
   return [state, setState] as const;
 }
 
+const PLAN_GRID_CACHE_KEY = "mrp.plan.grid.cache.v1";
+const PLAN_GRID_CACHE_STATIC_TTL = 30 * 60 * 1000;
+const PLAN_GRID_CACHE_DYNAMIC_TTL = 2 * 60 * 1000;
+
+type PlanGridCache = {
+  tsStatic?: number;
+  tsDynamic?: number;
+  products?: Product[];
+  semis?: Semi[];
+  materialsDict?: { id: string; code: string; name: string; uom?: string }[];
+  semisDict?: { id: string; code: string; name: string; uom?: string; leadDays?: number }[];
+  specs?: Spec[];
+  tgUsers?: { id: string; label: string }[];
+  stockBalances?: StockBalance[];
+};
+
+const isCacheFresh = (ts?: number, ttl = PLAN_GRID_CACHE_STATIC_TTL) =>
+  typeof ts === "number" && Date.now() - ts < ttl;
+
+const readPlanGridCache = (): PlanGridCache | null => {
+  try {
+    const raw = localStorage.getItem(PLAN_GRID_CACHE_KEY);
+    return raw ? (JSON.parse(raw) as PlanGridCache) : null;
+  } catch {
+    return null;
+  }
+};
+
+const writePlanGridCache = (patch: Partial<PlanGridCache>) => {
+  try {
+    const current = readPlanGridCache() ?? {};
+    const next = { ...current, ...patch };
+    localStorage.setItem(PLAN_GRID_CACHE_KEY, JSON.stringify(next));
+  } catch {}
+};
+
 // --- рабочие дни / просрочка ---
 const addWorkingDays = (iso: string, k: number) => {
   let cur = iso;
@@ -237,7 +273,27 @@ function PlanGridView() {
   const { warehouses, physical, zonesByPhys, findZoneByName, updateWarehouse } = useSupabaseWarehouses();
 
   React.useEffect(() => {
+    const cached = readPlanGridCache();
+    if (!cached) return;
+    if (cached.products && isCacheFresh(cached.tsStatic)) setProducts(cached.products);
+    if (cached.semis && isCacheFresh(cached.tsStatic)) setSemis(cached.semis);
+    if (cached.materialsDict && isCacheFresh(cached.tsStatic)) setMaterialsDict(cached.materialsDict);
+    if (cached.semisDict && isCacheFresh(cached.tsStatic)) setSemisDict(cached.semisDict);
+    if (cached.specs && isCacheFresh(cached.tsStatic)) setSpecs(cached.specs);
+    if (cached.tgUsers && isCacheFresh(cached.tsStatic)) setTgUsers(cached.tgUsers);
+    if (!authorId && cached.tgUsers?.length) setAuthorId(cached.tgUsers[0].id);
+    if (cached.stockBalances && isCacheFresh(cached.tsDynamic, PLAN_GRID_CACHE_DYNAMIC_TTL)) {
+      setStockBalances(cached.stockBalances);
+    }
+  }, [authorId]);
+
+  React.useEffect(() => {
     const loadProducts = async () => {
+      const cached = readPlanGridCache();
+      if (cached?.products && isCacheFresh(cached.tsStatic)) {
+        setProducts(cached.products);
+        return;
+      }
       const { data, error } = await supabase
         .from("items")
         .select("id, code, name, category, uom, status")
@@ -247,7 +303,7 @@ function PlanGridView() {
         console.error("load products", error);
         return;
       }
-      setProducts(
+      const mapped =
         (data || []).map((row: any) => ({
           id: row.id,
           status: row.status ?? "active",
@@ -255,14 +311,21 @@ function PlanGridView() {
           name: row.name,
           category: row.category ?? "",
           uom: row.uom ?? "шт",
-        }))
-      );
+        }));
+      setProducts(mapped);
+      writePlanGridCache({ products: mapped, tsStatic: Date.now() });
     };
     loadProducts();
   }, []);
 
   React.useEffect(() => {
     const loadSemis = async () => {
+      const cached = readPlanGridCache();
+      if (cached?.semis && cached.semisDict && isCacheFresh(cached.tsStatic)) {
+        setSemis(cached.semis);
+        setSemisDict(cached.semisDict);
+        return;
+      }
       const { data, error } = await supabase
         .from("items")
         .select("id, code, name, category, uom, status, lead_days")
@@ -283,13 +346,21 @@ function PlanGridView() {
           leadDays: Number(row.lead_days) || 0,
         }));
       setSemis(mapped);
-      setSemisDict(mapped.map((s) => ({ id: s.id, code: s.code, name: s.name, uom: s.uom, leadDays: s.leadDays })));
+      const nextDict = mapped.map((s) => ({ id: s.id, code: s.code, name: s.name, uom: s.uom, leadDays: s.leadDays }));
+      setSemisDict(nextDict);
+      writePlanGridCache({ semis: mapped, semisDict: nextDict, tsStatic: Date.now() });
     };
     loadSemis();
   }, []);
 
   React.useEffect(() => {
     const loadTgUsers = async () => {
+      const cached = readPlanGridCache();
+      if (cached?.tgUsers && isCacheFresh(cached.tsStatic)) {
+        setTgUsers(cached.tgUsers);
+        if (!authorId && cached.tgUsers.length) setAuthorId(cached.tgUsers[0].id);
+        return;
+      }
       const { data, error } = await supabase
         .from("tg_users")
         .select("id, username, first_name, last_name, status")
@@ -307,12 +378,18 @@ function PlanGridView() {
       if (!authorId && mapped.length) {
         setAuthorId(mapped[0].id);
       }
+      writePlanGridCache({ tgUsers: mapped, tsStatic: Date.now() });
     };
     loadTgUsers();
   }, [authorId]);
 
   React.useEffect(() => {
     const loadMaterials = async () => {
+      const cached = readPlanGridCache();
+      if (cached?.materialsDict && isCacheFresh(cached.tsStatic)) {
+        setMaterialsDict(cached.materialsDict);
+        return;
+      }
       const { data, error } = await supabase
         .from("items")
         .select("id, code, name, uom")
@@ -322,20 +399,26 @@ function PlanGridView() {
         console.error("load materials", error);
         return;
       }
-      setMaterialsDict(
+      const mapped =
         (data || []).map((row: any) => ({
           id: row.id,
           code: row.code,
           name: row.name,
           uom: row.uom ?? "шт",
-        }))
-      );
+        }));
+      setMaterialsDict(mapped);
+      writePlanGridCache({ materialsDict: mapped, tsStatic: Date.now() });
     };
     loadMaterials();
   }, []);
 
   React.useEffect(() => {
     const loadSpecs = async () => {
+      const cached = readPlanGridCache();
+      if (cached?.specs && isCacheFresh(cached.tsStatic)) {
+        setSpecs(cached.specs);
+        return;
+      }
       const { data: specsData, error: specsErr } = await supabase
         .from("specs")
         .select("id, spec_code, spec_name, linked_product_id, updated_at");
@@ -362,7 +445,7 @@ function PlanGridView() {
         if (!linesBySpec.has(ln.spec_id)) linesBySpec.set(ln.spec_id, []);
         linesBySpec.get(ln.spec_id)!.push(entry);
       });
-      setSpecs(
+      const mapped =
         (specsData || []).map((sp: any) => ({
           id: sp.id,
           productId: sp.linked_product_id,
@@ -370,27 +453,34 @@ function PlanGridView() {
           productName: sp.spec_name,
           lines: linesBySpec.get(sp.id) ?? [],
           updatedAt: sp.updated_at ?? new Date().toISOString(),
-        }))
-      );
+        }));
+      setSpecs(mapped);
+      writePlanGridCache({ specs: mapped, tsStatic: Date.now() });
     };
     loadSpecs();
   }, []);
 
-  const refreshStockBalances = React.useCallback(async () => {
+  const refreshStockBalances = React.useCallback(async (force = false) => {
+    const cached = readPlanGridCache();
+    if (!force && cached?.stockBalances && isCacheFresh(cached.tsDynamic, PLAN_GRID_CACHE_DYNAMIC_TTL)) {
+      setStockBalances(cached.stockBalances);
+      return;
+    }
     const { data, error } = await supabase.from("stock_balances").select("warehouse_id, item_id, qty, updated_at");
     if (error) {
       console.error("load stock_balances", error);
       return;
     }
-    setStockBalances(
+    const mapped =
       (data || []).map((row: any) => ({
         id: `${row.warehouse_id}:${row.item_id}`,
         warehouseId: row.warehouse_id,
         itemId: row.item_id,
         qty: Number(row.qty) || 0,
         updatedAt: row.updated_at,
-      }))
-    );
+      }));
+    setStockBalances(mapped);
+    writePlanGridCache({ stockBalances: mapped, tsDynamic: Date.now() });
   }, []);
 
   React.useEffect(() => {
@@ -626,72 +716,6 @@ function PlanGridView() {
   const factMap = scope === "fg" ? factMapFG : factMapSEMI;
   const scrapMap = scope === "fg" ? scrapMapFG : scrapMapSEMI;
 
-  const handlePlanChange = (id: string, dateISO: string, val: number) => {
-    if (!physTarget) {
-      alert("Не выбран склад.");
-      return;
-    }
-
-    // Если планируем готовую продукцию с полуфабрикатами — проверяем остатки ПФ и предлагаем перенести
-    if (scope === "fg" && val > 0) {
-      const per = perUnitById[id];
-      const semiNeed = per?.semi ?? {};
-      const semiIds = Object.keys(semiNeed);
-      if (semiIds.length > 0) {
-        if (!semiZoneIdForPhys) {
-          alert("Не выбрана зона полуфабрикатов для расчёта обеспечения.");
-          return;
-        }
-        const shortages = semiIds
-          .map((sid) => {
-            const one = Number(semiNeed[sid] || 0);
-            const need = one * val;
-            const haveBase = getQty("semi", sid, semiZoneIdForPhys) + plannedSemiUpTo(sid, dateISO);
-            const reserved = plannedSemiUsedUpTo(sid, dateISO, { id, dateISO });
-            const have = Math.max(0, haveBase - reserved);
-            const deficit = Math.max(0, need - have);
-            return { sid, one, need, have, deficit, lead: Number(semiMap[sid]?.leadDays ?? 0) };
-          })
-          .filter((x) => x.deficit > 0);
-
-        if (shortages.length > 0) {
-          const maxLead = Math.max(...shortages.map((s) => s.lead || 0));
-          const suggestDate = maxLead > 0 ? addWorkingDays(dateISO, maxLead) : dateISO;
-          const lines = [
-            "Не хватает полуфабрикатов:",
-            ...shortages.map(
-              (s) =>
-                `• ${nameOf("semi", s.sid)}: нужно ${s.need}, есть ${s.have}` +
-                (s.lead > 0 ? ` (срок ${s.lead} дн.)` : "")
-            ),
-            "",
-            `Предлагаю запланировать выпуск ПФ на ${dateISO} и перенести выпуск товара на ${suggestDate}.`,
-          ];
-          const ok = window.confirm(lines.join("\n"));
-          if (!ok) {
-            // пользователь отказался — ставим план как есть
-          } else {
-            // 1) Обнуляем текущую ячейку
-            updatePlanLocal(scope, id, dateISO, 0);
-            upsertPlanValue(scope, id, dateISO, 0, physTarget);
-            // 2) Ставим план ГП на предложенную дату
-            updatePlanLocal(scope, id, suggestDate, val);
-            upsertPlanValue(scope, id, suggestDate, val, physTarget);
-            // 3) Ставим планы ПФ на исходную дату на размер дефицита
-            shortages.forEach((s) => {
-              updatePlanLocal("semi", s.sid, dateISO, s.deficit);
-              upsertPlanValue("semi", s.sid, dateISO, s.deficit, physTarget);
-            });
-            return;
-          }
-        }
-      }
-    }
-
-    updatePlanLocal(scope, id, dateISO, val);
-    upsertPlanValue(scope, id, dateISO, val, physTarget);
-  };
-
   // список категорий
   const availableCats = React.useMemo(() => {
     const pool = scope === "fg" ? products : semis;
@@ -828,6 +852,72 @@ function PlanGridView() {
     },
     [planMapFG, perUnitById]
   );
+
+  const handlePlanChange = (id: string, dateISO: string, val: number) => {
+    if (!physTarget) {
+      alert("Не выбран склад.");
+      return;
+    }
+
+    // Если планируем готовую продукцию с полуфабрикатами — проверяем остатки ПФ и предлагаем перенести
+    if (scope === "fg" && val > 0) {
+      const per = perUnitById[id];
+      const semiNeed = per?.semi ?? {};
+      const semiIds = Object.keys(semiNeed);
+      if (semiIds.length > 0) {
+        if (!semiZoneIdForPhys) {
+          alert("Не выбрана зона полуфабрикатов для расчёта обеспечения.");
+          return;
+        }
+        const shortages = semiIds
+          .map((sid) => {
+            const one = Number(semiNeed[sid] || 0);
+            const need = one * val;
+            const haveBase = getQty("semi", sid, semiZoneIdForPhys) + plannedSemiUpTo(sid, dateISO);
+            const reserved = plannedSemiUsedUpTo(sid, dateISO, { id, dateISO });
+            const have = Math.max(0, haveBase - reserved);
+            const deficit = Math.max(0, need - have);
+            return { sid, one, need, have, deficit, lead: Number(semiMap[sid]?.leadDays ?? 0) };
+          })
+          .filter((x) => x.deficit > 0);
+
+        if (shortages.length > 0) {
+          const maxLead = Math.max(...shortages.map((s) => s.lead || 0));
+          const suggestDate = maxLead > 0 ? addWorkingDays(dateISO, maxLead) : dateISO;
+          const lines = [
+            "Не хватает полуфабрикатов:",
+            ...shortages.map(
+              (s) =>
+                `• ${nameOf("semi", s.sid)}: нужно ${s.need}, есть ${s.have}` +
+                (s.lead > 0 ? ` (срок ${s.lead} дн.)` : "")
+            ),
+            "",
+            `Предлагаю запланировать выпуск ПФ на ${dateISO} и перенести выпуск товара на ${suggestDate}.`,
+          ];
+          const ok = window.confirm(lines.join("\n"));
+          if (!ok) {
+            // пользователь отказался — ставим план как есть
+          } else {
+            // 1) Обнуляем текущую ячейку
+            updatePlanLocal(scope, id, dateISO, 0);
+            upsertPlanValue(scope, id, dateISO, 0, physTarget);
+            // 2) Ставим план ГП на предложенную дату
+            updatePlanLocal(scope, id, suggestDate, val);
+            upsertPlanValue(scope, id, suggestDate, val, physTarget);
+            // 3) Ставим планы ПФ на исходную дату на размер дефицита
+            shortages.forEach((s) => {
+              updatePlanLocal("semi", s.sid, dateISO, s.deficit);
+              upsertPlanValue("semi", s.sid, dateISO, s.deficit, physTarget);
+            });
+            return;
+          }
+        }
+      }
+    }
+
+    updatePlanLocal(scope, id, dateISO, val);
+    upsertPlanValue(scope, id, dateISO, val, physTarget);
+  };
 
   type CovCell = { ok: boolean; canMake: number; title: string };
   const coverage: Record<string, Record<string, CovCell>> = React.useMemo(() => {
