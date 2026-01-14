@@ -15,6 +15,7 @@ export type SpecInput = {
   productId?: string | null;
   productCode?: string;
   productName?: string;
+  effectiveFrom?: string;
   lines: SpecLineInput[];
 };
 
@@ -47,14 +48,18 @@ export type SpecRecord = {
   specCode: string;
   specName: string;
   linkedProductId: string | null;
+  version?: number | null;
+  effectiveFrom?: string | null;
   updatedAt: string;
   lines: SpecLineRecord[];
 };
 
-export async function fetchSpecsFromSupabase(): Promise<SpecRecord[]> {
+export async function fetchSpecsFromSupabase(
+  opts?: { includeAll?: boolean }
+): Promise<SpecRecord[]> {
   const { data: specsData, error: specsErr } = await supabase
     .from("specs")
-    .select("id, spec_code, spec_name, linked_product_id, updated_at")
+    .select("id, spec_code, spec_name, linked_product_id, version, effective_from, updated_at")
     .order("updated_at", { ascending: false });
   if (specsErr) throw specsErr;
 
@@ -98,14 +103,38 @@ export async function fetchSpecsFromSupabase(): Promise<SpecRecord[]> {
     linesBySpec.get(line.specId)!.push(line);
   });
 
-  return (specsData || []).map((row: any) => ({
+  const mapped = (specsData || []).map((row: any) => ({
     id: row.id as string,
     specCode: row.spec_code as string,
     specName: row.spec_name as string,
     linkedProductId: row.linked_product_id as string | null,
+    version: row.version ?? null,
+    effectiveFrom: row.effective_from ?? null,
     updatedAt: row.updated_at ?? new Date().toISOString(),
     lines: linesBySpec.get(row.id) ?? [],
   }));
+
+  if (opts?.includeAll) return mapped;
+
+  const sorted = mapped.sort((a, b) => {
+    const aEff = a.effectiveFrom || "";
+    const bEff = b.effectiveFrom || "";
+    if (aEff !== bEff) return bEff.localeCompare(aEff);
+    const aVer = Number(a.version ?? 0);
+    const bVer = Number(b.version ?? 0);
+    if (aVer !== bVer) return bVer - aVer;
+    return String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? ""));
+  });
+
+  const seen = new Set<string>();
+  const latest: SpecRecord[] = [];
+  for (const row of sorted) {
+    const key = row.linkedProductId || row.specCode;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    latest.push(row);
+  }
+  return latest;
 }
 
 const findSource = (ctx: SpecContext, kind: "mat" | "semi", id?: string) => {
@@ -118,17 +147,22 @@ export async function upsertSpecSupabase(spec: SpecInput, ctx: SpecContext): Pro
   const specCodeRaw = spec.productCode?.trim() || spec.id || "";
   const specCode = specCodeRaw ? specCodeRaw : `SPEC-${Date.now()}`;
   let specId = spec.id && isUuid(spec.id) ? spec.id : null;
+  let nextVersion = 1;
 
-  if (!specId) {
-    const { data, error: selectErr } = await supabase
-      .from("specs")
-      .select("id")
-      .eq("spec_code", specCode)
-      .limit(1);
-    if (selectErr) throw selectErr;
-    if (data?.[0]?.id) specId = data[0].id as string;
+  const { data: latestSpec, error: selectErr } = await supabase
+    .from("specs")
+    .select("id, version, linked_product_id")
+    .eq("spec_code", specCode)
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (selectErr) throw selectErr;
+  if (latestSpec?.id) {
+    nextVersion = Number(latestSpec.version ?? 0) + 1;
+    specId = generateUuid();
+  } else if (!specId) {
+    specId = generateUuid();
   }
-  if (!specId) specId = generateUuid();
 
   let linkedProductUuid: string | null = null;
   const legacyProductId = spec.productId?.trim();
@@ -145,6 +179,9 @@ export async function upsertSpecSupabase(spec: SpecInput, ctx: SpecContext): Pro
       console.warn("upsertSpecSupabase: resolve product uuid failed", err);
       linkedProductUuid = null;
     }
+  }
+  if (!linkedProductUuid && latestSpec?.linked_product_id) {
+    linkedProductUuid = latestSpec.linked_product_id as string;
   }
 
   const vendorNameById = new Map(ctx.vendors?.map((v) => [v.id, v.name]));
@@ -184,19 +221,16 @@ export async function upsertSpecSupabase(spec: SpecInput, ctx: SpecContext): Pro
     linked_product_id: linkedProductUuid,
     spec_code: specCode,
     spec_name: spec.productName?.trim() || specCode,
+    version: nextVersion,
+    effective_from: spec.effectiveFrom || new Date().toISOString().slice(0, 10),
     updated_at: new Date().toISOString(),
   };
 
   const { error: specErr } = await supabase
     .from("specs")
-    .upsert(specRecord, { onConflict: "id" });
+    .insert(specRecord);
   if (specErr) throw specErr;
 
-  const { error: deleteLinesErr } = await supabase
-    .from("spec_lines")
-    .delete()
-    .eq("spec_id", specId);
-  if (deleteLinesErr) throw deleteLinesErr;
   if (linePayload.length) {
     const { error: linesErr } = await supabase
       .from("spec_lines")

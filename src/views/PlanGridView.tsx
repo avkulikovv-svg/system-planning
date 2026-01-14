@@ -2,6 +2,7 @@
 import React from "react";
 import { Search } from "lucide-react";
 import { supabase } from "../api/supabaseClient";
+import { fetchSpecsFromSupabase } from "../utils/specSupabase";
 import { useSupabaseWarehouses } from "../hooks/useSupabaseDicts";
 
 /* ========= Типы ========= */
@@ -419,43 +420,27 @@ function PlanGridView() {
         setSpecs(cached.specs);
         return;
       }
-      const { data: specsData, error: specsErr } = await supabase
-        .from("specs")
-        .select("id, spec_code, spec_name, linked_product_id, updated_at");
-      if (specsErr) {
-        console.error("load specs", specsErr);
-        return;
-      }
-      const { data: linesData, error: linesErr } = await supabase
-        .from("spec_lines")
-        .select("id, spec_id, kind, ref_item_id, qty, uom");
-      if (linesErr) {
-        console.error("load spec lines", linesErr);
-        return;
-      }
-      const linesBySpec = new Map<string, SpecLine[]>();
-      (linesData || []).forEach((ln: any) => {
-        const entry: SpecLine = {
-          id: ln.id,
-          kind: (ln.kind as "mat" | "semi") ?? "mat",
-          refId: ln.ref_item_id,
-          qty: Number(ln.qty) || 0,
-          uom: ln.uom || "",
-        };
-        if (!linesBySpec.has(ln.spec_id)) linesBySpec.set(ln.spec_id, []);
-        linesBySpec.get(ln.spec_id)!.push(entry);
-      });
-      const mapped =
-        (specsData || []).map((sp: any) => ({
+      try {
+        const rows = await fetchSpecsFromSupabase();
+        const mapped = rows.map((sp) => ({
           id: sp.id,
-          productId: sp.linked_product_id,
-          productCode: sp.spec_code,
-          productName: sp.spec_name,
-          lines: linesBySpec.get(sp.id) ?? [],
-          updatedAt: sp.updated_at ?? new Date().toISOString(),
+          productId: sp.linkedProductId ?? undefined,
+          productCode: sp.specCode,
+          productName: sp.specName,
+          lines: sp.lines.map((ln) => ({
+            id: ln.id,
+            kind: ln.kind,
+            refId: ln.refId,
+            qty: ln.qty,
+            uom: ln.uom,
+          })),
+          updatedAt: sp.updatedAt ?? new Date().toISOString(),
         }));
-      setSpecs(mapped);
-      writePlanGridCache({ specs: mapped, tsStatic: Date.now() });
+        setSpecs(mapped);
+        writePlanGridCache({ specs: mapped, tsStatic: Date.now() });
+      } catch (err) {
+        console.error("load specs", err);
+      }
     };
     loadSpecs();
   }, []);

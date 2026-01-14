@@ -755,7 +755,7 @@ const isUuid = (s?: string | null) =>
 /* ---------- ProductForm (use .code) ---------- */
 type ProductFormProps = {
   initial: Product | null;
-  onSave: (p: Product) => void;
+  onSave: (p: Product, opts?: { attachSpecId?: string; detachSpecId?: string }) => void;
   onCancel: () => void;
   dicts: {
     statuses: string[];
@@ -766,6 +766,8 @@ type ProductFormProps = {
   };
   ensureUniqueCode: (code: string, selfId?: string) => boolean;
   openSpecFor: (p: { id?: string; code: string; name: string }) => void;
+  specs?: Spec[];
+  initialSpecId?: string;
 };
 
 function ProductForm({
@@ -775,6 +777,8 @@ function ProductForm({
   dicts,
   ensureUniqueCode,
   openSpecFor,
+  specs,
+  initialSpecId,
 }: ProductFormProps) {
   const [m, setM] = React.useState<Product>(() =>
     initial ?? {
@@ -887,8 +891,12 @@ function ProductForm({
       alert("Артикул (code) уже используется");
       return;
     }
-    onSave({ ...m, code });
+    const detachSpecId = !specId && initialSpecId ? initialSpecId : undefined;
+    onSave({ ...m, code }, { attachSpecId: specId || undefined, detachSpecId });
   };
+
+  const [specId, setSpecId] = React.useState<string>(initialSpecId || "");
+  React.useEffect(() => setSpecId(initialSpecId || ""), [initialSpecId]);
 
   return (
     <form onSubmit={save}>
@@ -936,6 +944,35 @@ function ProductForm({
             </button>
           </div>
         </div>
+
+        {specs?.length ? (
+          <div className="form-span-2">
+            <Label>Спецификация (выбрать существующую)</Label>
+            <select
+              className="form-control mrp-select"
+              value={specId}
+              onChange={(e) => setSpecId(e.target.value)}
+            >
+              <option value="">— не выбрана —</option>
+              {[...specs]
+                .sort((a, b) => {
+                  const aKey = `${a.productCode || ""} ${a.productName || ""}`.trim();
+                  const bKey = `${b.productCode || ""} ${b.productName || ""}`.trim();
+                  return aKey.localeCompare(bKey, "ru");
+                })
+                .map((sp) => {
+                  const label = sp.productCode
+                    ? `${sp.productCode} — ${sp.productName}`
+                    : sp.productName;
+                  return (
+                    <option key={sp.id} value={sp.id}>
+                      {label}
+                    </option>
+                  );
+                })}
+            </select>
+          </div>
+        ) : null}
 
         {/* Категория */}
         <div>
@@ -1313,7 +1350,60 @@ function ProductsView() {
   }, [setSpecs]);
   useEffect(() => { syncSpecs(); }, [syncSpecs]);
   const findSpecForProduct = (p: { id?: string; code: string }) =>
-    specs.find((s) => (p.id && s.productId === p.id) || s.productCode === p.code);
+    p.id ? specs.find((s) => s.productId === p.id) : undefined;
+  const unlinkSpecsForProduct = React.useCallback(
+    async (productId: string) => {
+      if (!productId) return;
+      const { error } = await supabase
+        .from("specs")
+        .update({
+          linked_product_id: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("linked_product_id", productId);
+      if (error) {
+        console.error("Ошибка отвязки спецификаций:", error);
+        alert("Не удалось отвязать спецификации, смотри консоль");
+        return;
+      }
+      await syncSpecs();
+    },
+    [syncSpecs],
+  );
+  const linkSpecToProduct = React.useCallback(
+    async (specId: string, product: Product) => {
+      if (!specId) return;
+      const productId = product?.id?.trim();
+      if (!productId) return;
+      const { error: unlinkError } = await supabase
+        .from("specs")
+        .update({
+          linked_product_id: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("linked_product_id", productId)
+        .neq("id", specId);
+      if (unlinkError) {
+        console.error("Ошибка отвязки старых спецификаций:", unlinkError);
+        alert("Не удалось отвязать старые спецификации, смотри консоль");
+        return;
+      }
+      const { error } = await supabase
+        .from("specs")
+        .update({
+          linked_product_id: productId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", specId);
+      if (error) {
+        console.error("Ошибка привязки спецификации:", error);
+        alert("Не удалось привязать спецификацию, смотри консоль");
+        return;
+      }
+      await syncSpecs();
+    },
+    [syncSpecs],
+  );
 
   /* MATERIAL FORM from Spec (async) */
   const [matModalOpen, setMatModalOpen] = useState(false);
@@ -1502,7 +1592,10 @@ function ProductsView() {
     }
   }, [items]);
 
-  const saveProduct = async (p: Product) => {
+  const saveProduct = async (
+    p: Product,
+    opts?: { attachSpecId?: string; detachSpecId?: string }
+  ) => {
     const id = p.id && isUuid(p.id) ? p.id : generateUuid();
     const unitWeight = Number(p.unitWeight ?? 0);
     const unitsPerBox = Number(p.unitsPerBox ?? 0);
@@ -1540,6 +1633,14 @@ function ProductsView() {
       console.error("ProductsView save product", error);
       alert("Не удалось сохранить товар в Supabase, см. консоль.");
       return;
+    }
+    if (!opts?.attachSpecId && id) {
+      await unlinkSpecsForProduct(id);
+    } else if (opts?.detachSpecId && opts.detachSpecId !== opts.attachSpecId) {
+      await unlinkSpecsForProduct(id);
+    }
+    if (opts?.attachSpecId) {
+      await linkSpecToProduct(opts.attachSpecId, { ...p, id });
     }
     setProdModalOpen(false);
     await loadProducts();
@@ -1855,6 +1956,8 @@ function ProductsView() {
             dicts={{ statuses, categories, uoms, addCategory, addUom }}
             ensureUniqueCode={ensureUniqueProductCode}
             openSpecFor={openSpec}
+            specs={specs}
+            initialSpecId={editing ? findSpecForProduct(editing)?.id : undefined}
           />
         </Modal>
       )}

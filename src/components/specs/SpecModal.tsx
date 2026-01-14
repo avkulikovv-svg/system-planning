@@ -23,8 +23,19 @@ type Spec = {
   productId?: string | null;
   productCode: string;
   productName: string;
+  effectiveFrom?: string;
+  version?: number;
   lines: SpecLine[];
   updatedAt: string;
+};
+
+type SpecVersionRow = {
+  id: string;
+  specCode: string;
+  specName: string;
+  version: number | null;
+  effectiveFrom: string | null;
+  createdAt: string | null;
 };
 
 type ProductRef = { id?: string; code?: string; name?: string };
@@ -74,6 +85,8 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
   const uoms = React.useMemo(() => uomRecords.map((u) => u.name), [uomRecords]);
   const [specs, setSpecs] = useSpecs();
   const [dictLoading, setDictLoading] = React.useState(false);
+  const [versionRows, setVersionRows] = React.useState<SpecVersionRow[]>([]);
+  const [versionsLoading, setVersionsLoading] = React.useState(false);
 
   React.useEffect(() => {
     if (!open) return;
@@ -139,12 +152,19 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
   }, [open, materials, semis, setMaterials, setSemis]);
 
   const initialSpec: Spec = React.useMemo(() => {
-    if (spec) return { ...spec, lines: (spec.lines || []).map(normalizeLine) };
+    if (spec) {
+      return {
+        ...spec,
+        effectiveFrom: spec.effectiveFrom || new Date().toISOString().slice(0, 10),
+        lines: (spec.lines || []).map(normalizeLine),
+      };
+    }
     return {
       id: uid(),
       productId: productRef?.id ?? null,
       productCode: productRef?.code ?? "",
       productName: productRef?.name ?? "",
+      effectiveFrom: new Date().toISOString().slice(0, 10),
       lines: [],
       updatedAt: new Date().toISOString(),
     };
@@ -198,12 +218,31 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
 
   const [saving, setSaving] = React.useState(false);
 
+  const formatDate = (iso?: string | null) => {
+    if (!iso) return "—";
+    const d = new Date(`${iso}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return iso;
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = d.getFullYear();
+    return `${dd}.${mm}.${yyyy}`;
+  };
+
+  const subtractOneDay = (iso?: string | null) => {
+    if (!iso) return null;
+    const d = new Date(`${iso}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return null;
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  };
+
   const save = async () => {
     if (saving) return;
     const err = validate();
     if (err) { alert(err); return; }
     const clean: Spec = {
       ...draft,
+      effectiveFrom: draft.effectiveFrom || new Date().toISOString().slice(0, 10),
       lines: draft.lines.map(ln => {
         const n = normalizeLine(ln);
         return { id: n.id, kind: n.kind, refId: n.refId, qty: n.qty, uom: n.uom };
@@ -241,6 +280,47 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
     onClose();
     setSaving(false);
   };
+
+  React.useEffect(() => {
+    if (!open) return;
+    const specCode = (draft.productCode || "").trim();
+    if (!specCode) {
+      setVersionRows([]);
+      return;
+    }
+    let canceled = false;
+    const loadVersions = async () => {
+      setVersionsLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from("specs")
+          .select("id, spec_code, spec_name, version, effective_from, created_at")
+          .eq("spec_code", specCode)
+          .order("effective_from", { ascending: false })
+          .order("version", { ascending: false });
+        if (error) throw error;
+        if (canceled) return;
+        const mapped = (data || []).map((row: any) => ({
+          id: row.id as string,
+          specCode: row.spec_code as string,
+          specName: row.spec_name as string,
+          version: row.version ?? null,
+          effectiveFrom: row.effective_from ?? null,
+          createdAt: row.created_at ?? null,
+        }));
+        setVersionRows(mapped);
+      } catch (err) {
+        console.error("SpecModal: load versions failed", err);
+        if (!canceled) setVersionRows([]);
+      } finally {
+        if (!canceled) setVersionsLoading(false);
+      }
+    };
+    loadVersions();
+    return () => {
+      canceled = true;
+    };
+  }, [open, draft.productCode]);
 
   if (!open) return null;
 
@@ -290,6 +370,52 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
                 placeholder="Введите наименование спецификации"
               />
             </div>
+          </div>
+          <div className="ui-form form-grid-2 mt-2">
+            <div>
+              <div className="form-label">Дата вступления</div>
+              <input
+                className="form-control"
+                type="date"
+                value={draft.effectiveFrom || ""}
+                onChange={(e) => setDraft({ ...draft, effectiveFrom: e.target.value })}
+              />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="text-sm font-semibold mb-2">История версий</div>
+            {versionsLoading ? (
+              <div className="text-xs text-slate-500">Загружаем версии…</div>
+            ) : versionRows.length === 0 ? (
+              <div className="text-xs text-slate-500">Версии не найдены.</div>
+            ) : (
+              <div className="table-wrapper">
+                <table className="mrp-table text-sm table-compact">
+                  <thead>
+                    <tr>
+                      <th className="text-left px-2 py-2 w-[80px]">Версия</th>
+                      <th className="text-left px-2 py-2 w-[140px]">Активна с</th>
+                      <th className="text-left px-2 py-2 w-[140px]">Активна до</th>
+                      <th className="text-left px-2 py-2">Создана</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {versionRows.map((row, idx) => {
+                      const next = versionRows[idx - 1];
+                      const activeTo = next?.effectiveFrom ? subtractOneDay(next.effectiveFrom) : null;
+                      return (
+                        <tr key={row.id} className="border-t border-slate-200">
+                          <td className="px-2 py-[6px]">v{row.version ?? "—"}</td>
+                          <td className="px-2 py-[6px]">{formatDate(row.effectiveFrom)}</td>
+                          <td className="px-2 py-[6px]">{formatDate(activeTo)}</td>
+                          <td className="px-2 py-[6px]">{formatDate(row.createdAt)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           {dictLoading && (
