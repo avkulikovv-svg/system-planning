@@ -92,6 +92,14 @@ type Material = {
   currency?: string;
   group: string;
 };
+type Semi = {
+  id: string;
+  code: string;
+  name: string;
+  uom?: string;
+  group?: string;
+  status?: string;
+};
 
 /* === Spec model === (поддерживаем совместимость с item) */
 type SpecLine = {
