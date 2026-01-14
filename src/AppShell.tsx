@@ -1385,7 +1385,7 @@ function ProductsView() {
       console.error("ProductsView load warehouses", error);
       return;
     }
-    const mapped = (data || []).map((row: any) => ({
+    const mapped: Warehouse[] = (data || []).map((row: any) => ({
       id: row.id,
       name: row.name,
       type: row.type === "physical" ? "physical" : "virtual",

@@ -99,6 +99,8 @@ type MaterialsStockCache = {
 };
 
 type MaterialsPlanCache = {
+  planMapFG?: Record<string, Record<string, number>>;
+  planMapSEMI?: Record<string, Record<string, number>>;
   fg?: Record<string, Record<string, number>>;
   semi?: Record<string, Record<string, number>>;
   ts?: number;
@@ -1223,9 +1225,11 @@ const loadPlans = React.useCallback(async () => {
   const endDate = ordered[ordered.length - 1];
   const cacheKey = `${MATERIALS_PLAN_CACHE_PREFIX}${physTarget}:${startDate}:${endDate}`;
   const cached = readMaterialsPlanCache(cacheKey);
-  if (cached?.planMapFG && cached?.planMapSEMI && isMaterialsDynamicFresh(cached.ts)) {
-    setPlanMapFG(cached.planMapFG);
-    setPlanMapSEMI(cached.planMapSEMI);
+  const cachedFg = cached?.planMapFG ?? cached?.fg;
+  const cachedSemi = cached?.planMapSEMI ?? cached?.semi;
+  if (cachedFg && cachedSemi && isMaterialsDynamicFresh(cached.ts)) {
+    setPlanMapFG(cachedFg);
+    setPlanMapSEMI(cachedSemi);
     return;
   }
 
