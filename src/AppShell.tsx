@@ -1509,9 +1509,9 @@ function ProductsView() {
     writeProductsCache({ stockRows: mapped });
   }, []);
 
-  const loadProducts = useCallback(async () => {
+  const loadProducts = useCallback(async (force = false) => {
     const cache = readProductsCache();
-    if (isProductsStaticFresh(cache, "items") && Array.isArray(cache?.items)) {
+    if (!force && isProductsStaticFresh(cache, "items") && Array.isArray(cache?.items)) {
       setItems(cache.items);
       return;
     }
@@ -1643,7 +1643,7 @@ function ProductsView() {
       await linkSpecToProduct(opts.attachSpecId, { ...p, id });
     }
     setProdModalOpen(false);
-    await loadProducts();
+    await loadProducts(true);
   };
 
   const removeProduct = async (id?: string) => {
@@ -1657,7 +1657,7 @@ function ProductsView() {
       alert("Не удалось удалить товар в Supabase, см. консоль.");
       return;
     }
-    await loadProducts();
+    await loadProducts(true);
   };
 
   const openSpec = (p: { id?: string; code: string; name: string }) => {

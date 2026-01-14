@@ -1542,12 +1542,29 @@ const saveForm = async (
     console.error("Ошибка перезагрузки items:", loadError);
   } else {
     const mapped: BaseItem[] = (data || []).map(mapItemRow);
-
+    const newMap: Record<string, string> = {};
+    (data || []).forEach((row: any) => {
+      if (row.legacy_id) {
+        newMap[row.legacy_id as string] = row.id as string;
+      }
+    });
+    const mergedLegacy = { ...legacyToUuid, ...newMap };
+    setLegacyToUuid(mergedLegacy);
 
     if (currentKind === "material") {
       setMaterialsAll(mapped as Material[]);
+      writeMaterialsItemsCache({
+        materials: mapped as Material[],
+        legacyToUuid: mergedLegacy,
+        tsStatic: Date.now(),
+      });
     } else {
       setSemisAll(mapped as Semi[]);
+      writeMaterialsItemsCache({
+        semis: mapped as Semi[],
+        legacyToUuid: mergedLegacy,
+        tsStatic: Date.now(),
+      });
     }
   }
 
@@ -1584,11 +1601,29 @@ const saveForm = async (
     }
 
     const mapped: BaseItem[] = (data || []).map(mapItemRow);
+    const newMap: Record<string, string> = {};
+    (data || []).forEach((row: any) => {
+      if (row.legacy_id) {
+        newMap[row.legacy_id as string] = row.id as string;
+      }
+    });
+    const mergedLegacy = { ...legacyToUuid, ...newMap };
+    setLegacyToUuid(mergedLegacy);
 
     if (currentKind === "material") {
       setMaterialsAll(mapped as Material[]);
+      writeMaterialsItemsCache({
+        materials: mapped as Material[],
+        legacyToUuid: mergedLegacy,
+        tsStatic: Date.now(),
+      });
     } else {
       setSemisAll(mapped as Semi[]);
+      writeMaterialsItemsCache({
+        semis: mapped as Semi[],
+        legacyToUuid: mergedLegacy,
+        tsStatic: Date.now(),
+      });
     }
   };
 
