@@ -22,12 +22,15 @@ type ChannelCode = typeof channelGroups[number]["code"];
 type SupplyColumn = {
   id: string;
   channel: ChannelCode;
+  channelId: string;
   title: string;
   subtitle: string;
   externalSupplyId?: string | null;
   destinationId?: string | null;
+  shipmentName?: string | null;
   supplyBoxTypeId?: number | null;
   planDate?: string | null;
+  warehouseShippedAt?: string | null;
 };
 
 type MatrixItem = {
@@ -75,6 +78,7 @@ type SupplyPlanRow = {
   supply_box_type_id?: number | null;
   status: string;
   updated_at?: string | null;
+  warehouse_shipped_at?: string | null;
 };
 
 type SupplyHistoryRow = {
@@ -92,6 +96,12 @@ type SupplyHistoryRow = {
   archived_at?: string | null;
   restored_at?: string | null;
   canceled_at?: string | null;
+};
+
+type PlanFgRow = {
+  product_id: string;
+  date_iso: string;
+  qty: number;
 };
 
 type ItemRow = {
@@ -120,7 +130,7 @@ const formatDateShort = (iso: string) => {
   return `${dd}.${mm}`;
 };
 
-const MARKETPLACES_CACHE_KEY = "mrp.marketplaces.cache.v1";
+const MARKETPLACES_CACHE_KEY = "mrp.marketplaces.cache.v3";
 const MARKETPLACES_STATIC_TTL_MS = 30 * 60 * 1000;
 const MARKETPLACES_DYNAMIC_TTL_MS = 2 * 60 * 1000;
 
@@ -134,7 +144,14 @@ type MarketplaceCachePayload = {
   barcodes: Array<{ item_id: string; barcode: string; channel?: string | null; is_primary?: boolean }>;
   plans: SupplyPlanRow[];
   history: SupplyHistoryRow[];
+  plansFg: PlanFgRow[];
   hasSupplyBoxType: boolean;
+};
+
+type ColumnPlanRow = {
+  id: string;
+  item_id: string;
+  qty: number;
 };
 
 const readMarketplacesCache = (): MarketplaceCachePayload | null => {
@@ -191,6 +208,7 @@ const buildMarketplaceState = (params: {
 
   const columnMap = new Map<string, SupplyColumn>();
   const matrixNext: Record<string, Record<string, number>> = {};
+  const columnPlans: Record<string, ColumnPlanRow[]> = {};
 
   for (const plan of params.plans ?? []) {
     const channel = channelById.get(plan.channel_id);
@@ -203,12 +221,15 @@ const buildMarketplaceState = (params: {
       col = {
         id: colKey,
         channel: channel.code,
+        channelId: channel.id,
         title,
         subtitle: formatDateShort(plan.plan_date),
         externalSupplyId: plan.external_supply_id ?? null,
         destinationId: plan.destination_id ?? null,
+        shipmentName: plan.shipment_name ?? null,
         supplyBoxTypeId: plan.supply_box_type_id ?? null,
         planDate: plan.plan_date ?? null,
+        warehouseShippedAt: plan.warehouse_shipped_at ?? null,
       };
       columnMap.set(colKey, col);
     } else {
@@ -217,10 +238,22 @@ const buildMarketplaceState = (params: {
         col.supplyBoxTypeId = plan.supply_box_type_id;
       }
       if (!col.planDate && plan.plan_date) col.planDate = plan.plan_date;
+      if (!col.shipmentName && plan.shipment_name) col.shipmentName = plan.shipment_name;
+      if (!col.warehouseShippedAt && plan.warehouse_shipped_at) {
+        col.warehouseShippedAt = plan.warehouse_shipped_at;
+      }
+      if (col.warehouseShippedAt && plan.warehouse_shipped_at) {
+        col.warehouseShippedAt = col.warehouseShippedAt > plan.warehouse_shipped_at
+          ? col.warehouseShippedAt
+          : plan.warehouse_shipped_at;
+      }
     }
 
     if (!matrixNext[plan.item_id]) matrixNext[plan.item_id] = {};
     matrixNext[plan.item_id][col.id] = (matrixNext[plan.item_id][col.id] ?? 0) + Number(plan.qty ?? 0);
+
+    if (!columnPlans[col.id]) columnPlans[col.id] = [];
+    columnPlans[col.id].push({ id: plan.id, item_id: plan.item_id, qty: Number(plan.qty ?? 0) });
   }
 
   const bucketedItems: MatrixItem[] = (params.items ?? []).map((row) => ({
@@ -266,6 +299,7 @@ const buildMarketplaceState = (params: {
     columns: sortedColumns,
     items: bucketedItems,
     matrix: matrixNext,
+    columnPlans,
     historyRows: params.history ?? [],
     itemBarcodes: barcodeMap,
     lastUpdatedOzon,
@@ -281,10 +315,38 @@ const formatDateRu = (iso: string) => {
   return `${dd}.${mm}.${yyyy}`;
 };
 
+const formatDateTimeRu = (iso: string) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
 const addDays = (iso: string, days: number) => {
   const d = new Date(`${iso}T00:00:00`);
   if (Number.isNaN(d.getTime())) return iso;
   d.setDate(d.getDate() + days);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const subtractBusinessDays = (iso: string, days: number) => {
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  let remaining = days;
+  while (remaining > 0) {
+    d.setDate(d.getDate() - 1);
+    const weekday = d.getDay();
+    if (weekday === 0 || weekday === 6) continue;
+    remaining -= 1;
+  }
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
@@ -299,9 +361,12 @@ export function MarketplacesView() {
     OZON: true,
     CLIENT: true,
   });
+  const [warehouseFilter, setWarehouseFilter] = React.useState<"all" | "not_shipped" | "shipped">("all");
   const [columns, setColumns] = React.useState<SupplyColumn[]>([]);
   const [items, setItems] = React.useState<MatrixItem[]>([]);
   const [matrix, setMatrix] = React.useState<Record<string, Record<string, number>>>({});
+  const [columnPlans, setColumnPlans] = React.useState<Record<string, ColumnPlanRow[]>>({});
+  const [plansFg, setPlansFg] = React.useState<PlanFgRow[]>([]);
   const [historyRows, setHistoryRows] = React.useState<SupplyHistoryRow[]>([]);
   const [destinations, setDestinations] = React.useState<DestinationRow[]>([]);
   const [viewMode, setViewMode] = React.useState<"active" | "history">("active");
@@ -326,6 +391,7 @@ export function MarketplacesView() {
   const [palletMaxHeight, setPalletMaxHeight] = React.useState<string>("");
   const [palletLimits, setPalletLimits] = React.useState<PalletLimits>(DEFAULT_PALLET_LIMITS);
   const [hasSupplyBoxType, setHasSupplyBoxType] = React.useState(true);
+  const [warehouseUpdating, setWarehouseUpdating] = React.useState<string | null>(null);
 
   const loadData = React.useCallback(async () => {
     setError(null);
@@ -349,6 +415,8 @@ export function MarketplacesView() {
       setColumns(state.columns);
       setItems(state.items);
       setMatrix(state.matrix);
+      setColumnPlans(state.columnPlans);
+      setPlansFg(cached.plansFg ?? []);
       setHistoryRows(state.historyRows);
       setItemBarcodes(state.itemBarcodes);
       setDestinations(state.destinations);
@@ -380,9 +448,9 @@ export function MarketplacesView() {
       if (barcodeRes.error) throw barcodeRes.error;
 
       const plansSelectFull =
-        "id, channel_id, destination_id, item_id, plan_date, qty, shipment_name, external_supply_id, supply_box_type_id, status, updated_at";
+        "id, channel_id, destination_id, item_id, plan_date, qty, shipment_name, external_supply_id, supply_box_type_id, status, updated_at, warehouse_shipped_at";
       const plansSelectFallback =
-        "id, channel_id, destination_id, item_id, plan_date, qty, shipment_name, external_supply_id, status, updated_at";
+        "id, channel_id, destination_id, item_id, plan_date, qty, shipment_name, external_supply_id, status, updated_at, warehouse_shipped_at";
       const historySelectFull =
         "id, source_plan_id, channel_id, destination_id, item_id, plan_date, qty, shipment_name, external_supply_id, supply_box_type_id, status, archived_at, restored_at, canceled_at";
       const historySelectFallback =
@@ -439,6 +507,21 @@ export function MarketplacesView() {
       const planRows: SupplyPlanRow[] = plansRes.data ?? [];
       const historyData: SupplyHistoryRow[] = historyRes.data ?? [];
       const itemRows: ItemRow[] = itemsRes.data ?? [];
+      let plansFgRows: PlanFgRow[] = [];
+      const planItemIds = Array.from(new Set(planRows.map((row) => row.item_id)));
+      const planDates = planRows.map((row) => row.plan_date).filter(Boolean);
+      if (planItemIds.length > 0 && planDates.length > 0) {
+        const minDate = planDates.reduce((min, next) => (next < min ? next : min));
+        const maxDate = planDates.reduce((max, next) => (next > max ? next : max));
+        const plansFgRes = await supabase
+          .from("plans_fg")
+          .select("product_id, date_iso, qty")
+          .in("product_id", planItemIds)
+          .gte("date_iso", minDate)
+          .lte("date_iso", maxDate);
+        if (plansFgRes.error) throw plansFgRes.error;
+        plansFgRows = plansFgRes.data ?? [];
+      }
 
       const state = buildMarketplaceState({
         channels,
@@ -454,6 +537,8 @@ export function MarketplacesView() {
       setColumns(state.columns);
       setItems(state.items);
       setMatrix(state.matrix);
+      setColumnPlans(state.columnPlans);
+      setPlansFg(plansFgRows);
       setHistoryRows(state.historyRows);
       setItemBarcodes(state.itemBarcodes);
       setDestinations(state.destinations);
@@ -469,6 +554,7 @@ export function MarketplacesView() {
         barcodes: barcodeRes.data ?? [],
         plans: planRows,
         history: historyData,
+        plansFg: plansFgRows,
         hasSupplyBoxType: hasSupplyBoxTypeNext,
       });
     } catch (err: any) {
@@ -1052,7 +1138,157 @@ export function MarketplacesView() {
     setFilters((prev) => ({ ...prev, [code]: !prev[code] }));
   };
 
-  const visibleColumns = columns.filter((col) => filters[col.channel]);
+  const activeColumns = React.useMemo(
+    () => columns.filter((col) => !col.warehouseShippedAt),
+    [columns],
+  );
+  const filteredByWarehouse = React.useMemo(() => {
+    if (warehouseFilter === "all") return columns;
+    if (warehouseFilter === "shipped") return columns.filter((col) => col.warehouseShippedAt);
+    return columns.filter((col) => !col.warehouseShippedAt);
+  }, [columns, warehouseFilter]);
+  const visibleColumns = filteredByWarehouse.filter((col) => filters[col.channel]);
+  const activeColumnIds = React.useMemo(() => new Set(activeColumns.map((col) => col.id)), [activeColumns]);
+  const reserveByItem = React.useMemo(() => {
+    const next: Record<string, number> = {};
+    for (const item of items) {
+      const row = matrix[item.id];
+      if (!row) {
+        next[item.id] = 0;
+        continue;
+      }
+      let total = 0;
+      for (const [colId, qty] of Object.entries(row)) {
+        if (!activeColumnIds.has(colId)) continue;
+        total += Number(qty ?? 0);
+      }
+      next[item.id] = total;
+    }
+    return next;
+  }, [items, matrix, activeColumnIds]);
+  const plannedByItem = React.useMemo(() => {
+    const perItem = new Map<string, Record<string, number>>();
+    for (const row of plansFg) {
+      if (!row.product_id || !row.date_iso) continue;
+      const qty = Number(row.qty ?? 0);
+      if (!qty) continue;
+      const bucket = perItem.get(row.product_id) ?? {};
+      bucket[row.date_iso] = (bucket[row.date_iso] ?? 0) + qty;
+      perItem.set(row.product_id, bucket);
+    }
+    const result = new Map<string, { dates: string[]; cumulative: number[] }>();
+    perItem.forEach((datesMap, itemId) => {
+      const dates = Object.keys(datesMap).sort();
+      let running = 0;
+      const cumulative = dates.map((date) => {
+        running += datesMap[date] ?? 0;
+        return running;
+      });
+      result.set(itemId, { dates, cumulative });
+    });
+    return result;
+  }, [plansFg]);
+  const plannedUpTo = React.useCallback(
+    (itemId: string, cutoffIso: string | null) => {
+      if (!cutoffIso) return 0;
+      const info = plannedByItem.get(itemId);
+      if (!info) return 0;
+      const { dates, cumulative } = info;
+      if (!dates.length) return 0;
+      let lo = 0;
+      let hi = dates.length - 1;
+      let idx = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (dates[mid] <= cutoffIso) {
+          idx = mid;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      return idx >= 0 ? cumulative[idx] : 0;
+    },
+    [plannedByItem],
+  );
+  const columnsByDate = React.useMemo(
+    () =>
+      [...activeColumns].sort((a, b) => {
+        const aDate = a.planDate ?? "9999-12-31";
+        const bDate = b.planDate ?? "9999-12-31";
+        const byDate = aDate.localeCompare(bDate);
+        if (byDate !== 0) return byDate;
+        return a.id.localeCompare(b.id);
+      }),
+    [activeColumns],
+  );
+  const columnRiskById = React.useMemo(() => {
+    const result: Record<string, "ok" | "warn" | "risk"> = {};
+    if (!columnsByDate.length || !items.length) return result;
+    const stockByItem = new Map(items.map((it) => [it.id, Number(it.currentStock ?? 0)]));
+    const used: Record<string, number> = {};
+    for (const col of columnsByDate) {
+      let hasWarn = false;
+      let hasRisk = false;
+      for (const item of items) {
+        const qty = Number(matrix[item.id]?.[col.id] ?? 0);
+        if (!qty) continue;
+        const usedQty = used[item.id] ?? 0;
+        const stock = stockByItem.get(item.id) ?? 0;
+        const stockCovered = stock - usedQty >= qty;
+        if (!stockCovered) {
+          const cutoff = col.planDate ? subtractBusinessDays(col.planDate, 2) : null;
+          const planned = plannedUpTo(item.id, cutoff);
+          const planCovered = stock + planned - usedQty >= qty;
+          if (!planCovered) {
+            hasRisk = true;
+          } else {
+            hasWarn = true;
+          }
+        }
+        used[item.id] = usedQty + qty;
+      }
+      if (hasRisk) {
+        result[col.id] = "risk";
+      } else if (hasWarn) {
+        result[col.id] = "warn";
+      } else {
+        result[col.id] = "ok";
+      }
+    }
+    return result;
+  }, [columnsByDate, items, matrix, plannedUpTo]);
+  const itemRiskByColumn = React.useMemo(() => {
+    const result: Record<string, Record<string, "ok" | "warn" | "risk">> = {};
+    if (!columnsByDate.length || !items.length) return result;
+    const stockByItem = new Map(items.map((it) => [it.id, Number(it.currentStock ?? 0)]));
+    const used: Record<string, number> = {};
+    for (const item of items) {
+      used[item.id] = 0;
+      result[item.id] = {};
+    }
+    for (const col of columnsByDate) {
+      for (const item of items) {
+        const qty = Number(matrix[item.id]?.[col.id] ?? 0);
+        if (!qty) continue;
+        const usedQty = used[item.id] ?? 0;
+        const stock = stockByItem.get(item.id) ?? 0;
+        const cutoff = col.planDate ? subtractBusinessDays(col.planDate, 2) : null;
+        const planned = plannedUpTo(item.id, cutoff);
+        let status: "ok" | "warn" | "risk";
+        if (stock - usedQty >= qty) {
+          status = "ok";
+        } else if (stock + planned - usedQty >= qty) {
+          status = "warn";
+        } else {
+          status = "risk";
+        }
+        result[item.id][col.id] = status;
+        used[item.id] = usedQty + qty;
+      }
+    }
+    return result;
+  }, [columnsByDate, items, matrix, plannedUpTo]);
   const headerGroups = React.useMemo(() => {
     const groups: Array<{ code: ChannelCode; label: string; accent: string; count: number }> = [];
     for (const col of visibleColumns) {
@@ -1077,9 +1313,12 @@ export function MarketplacesView() {
     return Array.from(set).sort((a, b) => a.localeCompare(b, "ru"));
   }, [items]);
 
-  const itemsWithPlan = items.filter((item) =>
-    (matrix[item.id] && Object.values(matrix[item.id]).some((qty) => qty > 0)) ?? false,
-  );
+  const visibleColumnIds = React.useMemo(() => new Set(visibleColumns.map((col) => col.id)), [visibleColumns]);
+  const itemsWithPlan = items.filter((item) => {
+    const row = matrix[item.id];
+    if (!row) return false;
+    return Object.entries(row).some(([colId, qty]) => visibleColumnIds.has(colId) && qty > 0);
+  });
   const itemsWithoutPlan = items.filter((item) => !itemsWithPlan.find((pl) => pl.id === item.id));
 
   const sortItems = (arr: MatrixItem[]) =>
@@ -1095,10 +1334,18 @@ export function MarketplacesView() {
       <td className="mp-matrix__code">{item.code}</td>
       <td className="mp-matrix__name">{item.name}</td>
       <td className="mp-matrix__stock">{item.currentStock}</td>
+      <td className="mp-matrix__reserve">{reserveByItem[item.id] ?? 0}</td>
+      <td className="mp-matrix__free">
+        {Number(item.currentStock ?? 0) - (reserveByItem[item.id] ?? 0)}
+      </td>
       {visibleColumns.map((col) => {
         const value = matrix[item.id]?.[col.id] ?? 0;
+        const risk = itemRiskByColumn[item.id]?.[col.id];
         return (
-          <td key={`${item.id}-${col.id}`} className="mp-matrix__cell">
+          <td
+            key={`${item.id}-${col.id}`}
+            className={`mp-matrix__cell${risk ? ` mp-matrix__cell--${risk}` : ""}${col.warehouseShippedAt ? " mp-matrix__cell--warehouse" : ""}`}
+          >
             <input
               type="number"
               className="form-control input-compact mp-matrix__input"
@@ -1120,6 +1367,103 @@ export function MarketplacesView() {
     if (!meta) return true;
     return filters[meta.code];
   });
+
+  const getDefaultPhysicalWarehouseId = React.useCallback(async () => {
+    const { data: defaultWh, error: defaultErr } = await supabase
+      .from("warehouses")
+      .select("id")
+      .eq("type", "physical")
+      .eq("is_default", true)
+      .limit(1)
+      .maybeSingle();
+    if (defaultErr) throw defaultErr;
+    if (defaultWh?.id) return defaultWh.id;
+
+    const { data: whData, error: whErr } = await supabase
+      .from("warehouses")
+      .select("id")
+      .eq("type", "physical")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (whErr) throw whErr;
+    return whData?.id ?? null;
+  }, []);
+
+  const updateWarehouseShipment = React.useCallback(
+    async (col: SupplyColumn) => {
+      if (warehouseUpdating) return;
+      const planRows = columnPlans[col.id] ?? [];
+      if (!planRows.length) return;
+      const isShipped = Boolean(col.warehouseShippedAt);
+      const confirmText = isShipped
+        ? "Отменить отметку отгрузки со склада и вернуть остатки?"
+        : "Отметить поставку как отгруженную со склада и списать остатки?";
+      if (!window.confirm(confirmText)) return;
+
+      setWarehouseUpdating(col.id);
+      try {
+        const nowIso = new Date().toISOString();
+        const planIds = planRows.map((row) => row.id);
+        if (isShipped) {
+          const { error: delErr } = await supabase
+            .from("stock_movements")
+            .delete()
+            .eq("doc_type", "mp_supply")
+            .in("doc_id", planIds);
+          if (delErr) throw delErr;
+
+          const { error: updErr } = await supabase
+            .from("mp_supply_plans")
+            .update({ warehouse_shipped_at: null })
+            .in("id", planIds);
+          if (updErr) throw updErr;
+        } else {
+          const warehouseId = await getDefaultPhysicalWarehouseId();
+          if (!warehouseId) throw new Error("Не найден физический склад для списания.");
+
+          const { data: existingMoves, error: moveErr } = await supabase
+            .from("stock_movements")
+            .select("doc_id")
+            .eq("doc_type", "mp_supply")
+            .in("doc_id", planIds);
+          if (moveErr) throw moveErr;
+          const existing = new Set((existingMoves ?? []).map((m) => String(m.doc_id)));
+
+          const inserts = planRows
+            .filter((row) => !existing.has(String(row.id)))
+            .map((row) => ({
+              doc_type: "mp_supply",
+              doc_id: row.id,
+              item_id: row.item_id,
+              warehouse_id: warehouseId,
+              qty: Number(row.qty ?? 0) * -1,
+              created_at: nowIso,
+            }))
+            .filter((row) => Number(row.qty) !== 0);
+
+          if (inserts.length) {
+            const { error: insErr } = await supabase.from("stock_movements").insert(inserts);
+            if (insErr) throw insErr;
+          }
+
+          const { error: updErr } = await supabase
+            .from("mp_supply_plans")
+            .update({ warehouse_shipped_at: nowIso })
+            .in("id", planIds);
+          if (updErr) throw updErr;
+        }
+
+        await loadData();
+      } catch (err: any) {
+        console.error("update warehouse shipment", err);
+        setError(err?.message ?? "Не удалось обновить отгрузку");
+      } finally {
+        setWarehouseUpdating(null);
+      }
+    },
+    [columnPlans, getDefaultPhysicalWarehouseId, loadData, warehouseUpdating],
+  );
 
   const restoreHistoryRow = async (row: SupplyHistoryRow) => {
     const nowIso = new Date().toISOString();
@@ -1252,6 +1596,27 @@ export function MarketplacesView() {
               <span>{opt.label}</span>
             </label>
           ))}
+          <div className="filter-spacer" />
+          <div className="filter-group">
+            <button
+              className={`mrp-chip ${warehouseFilter === "all" ? "is-active" : ""}`}
+              onClick={() => setWarehouseFilter("all")}
+            >
+              Все
+            </button>
+            <button
+              className={`mrp-chip ${warehouseFilter === "not_shipped" ? "is-active" : ""}`}
+              onClick={() => setWarehouseFilter("not_shipped")}
+            >
+              Не отгружены со склада
+            </button>
+            <button
+              className={`mrp-chip ${warehouseFilter === "shipped" ? "is-active" : ""}`}
+              onClick={() => setWarehouseFilter("shipped")}
+            >
+              Отгружены со склада
+            </button>
+          </div>
           <div className="text-xs text-slate-500 ml-auto">
             {lastUpdatedOzon ? `Ozon обновлён: ${lastUpdatedOzon}` : "Ozon ещё не обновлялся"}
           </div>
@@ -1530,7 +1895,15 @@ export function MarketplacesView() {
                 <th rowSpan={2} className="sticky-col">Группа</th>
                 <th rowSpan={2} className="sticky-col">Код</th>
                 <th rowSpan={2} className="mp-matrix__name-head">Наименование</th>
-                <th rowSpan={2} className="mp-matrix__stock">Доступно</th>
+                <th rowSpan={2} className="mp-matrix__stock">
+                  Остаток
+                </th>
+                <th rowSpan={2} className="mp-matrix__reserve">
+                  Резерв
+                </th>
+                <th rowSpan={2} className="mp-matrix__free">
+                  Свободно
+                </th>
                 {headerGroups.map((group) => (
                   <th key={group.code} colSpan={group.count} className={`mp-matrix__group mp-${group.accent}`}>
                     {group.label}
@@ -1539,14 +1912,31 @@ export function MarketplacesView() {
               </tr>
               <tr>
                 {visibleColumns.length === 0 ? (
-                  <th className="mp-matrix__empty" colSpan={1}>
-                    Выберите хотя бы один канал
-                  </th>
+                <th className="mp-matrix__empty" colSpan={1}>
+                  Выберите хотя бы один канал
+                </th>
                 ) : (
                   visibleColumns.map((col) => (
-                    <th key={col.id} className="mp-matrix__col">
-                      <div>{col.title}</div>
+                    <th
+                      key={col.id}
+                      className={`mp-matrix__col${columnRiskById[col.id] ? ` mp-matrix__col--${columnRiskById[col.id]}` : ""}${col.warehouseShippedAt ? " mp-matrix__col--warehouse" : ""}`}
+                    >
+                      <div className="mp-matrix__col-title">{col.title}</div>
                       <small>{col.subtitle}</small>
+                      {col.warehouseShippedAt && (
+                        <div className="mp-matrix__col-badge">
+                          Уехала со склада · {formatDateTimeRu(col.warehouseShippedAt)}
+                        </div>
+                      )}
+                      <div className="mp-matrix__col-actions">
+                        <button
+                          className={`mrp-btn mrp-btn--xs ${col.warehouseShippedAt ? "mrp-btn--ghost" : "mrp-btn--primary"}`}
+                          onClick={() => updateWarehouseShipment(col)}
+                          disabled={warehouseUpdating === col.id}
+                        >
+                          {col.warehouseShippedAt ? "Отменить отгрузку" : "Отгрузить"}
+                        </button>
+                      </div>
                     </th>
                   ))
                 )}
@@ -1556,7 +1946,7 @@ export function MarketplacesView() {
               {sortItems(itemsWithPlan).map(renderRow)}
               {itemsWithoutPlan.length > 0 && (
                 <tr className="mp-divider">
-                  <td colSpan={visibleColumns.length + 4}>Без активных планов</td>
+                  <td colSpan={visibleColumns.length + 6}>Без активных планов</td>
                 </tr>
               )}
               {sortItems(itemsWithoutPlan).map(renderRow)}
