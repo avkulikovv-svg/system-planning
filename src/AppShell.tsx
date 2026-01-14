@@ -125,7 +125,7 @@ type Warehouse = {
 
 type StockBalance = {
   id: string;
-  itemType: "material" | "product";
+  itemType: "material" | "product" | "semi";
   itemId: string;
   warehouseId: string;            // virtual warehouse id
   qty: number;                    // >= 0
@@ -133,7 +133,7 @@ type StockBalance = {
 };
 
 type LedgerEntry = {
-  itemType: "material" | "product";
+  itemType: "material" | "product" | "semi";
   itemId: string;
   warehouseId: string;
   delta: number;                  // + приход, - списание
@@ -169,7 +169,7 @@ function useStockBalances() {
 function useStockRepo() {
   const [balances, setBalances] = useStockBalances();
 
-  const getQty = (itemType: "material" | "product", itemId: string, warehouseId: string) => {
+  const getQty = (itemType: "material" | "product" | "semi", itemId: string, warehouseId: string) => {
     return balances.find(b => b.itemType === itemType && b.itemId === itemId && b.warehouseId === warehouseId)?.qty ?? 0;
   };
 
@@ -2676,7 +2676,7 @@ export default function AppShell() {
           viewBox="0 0 200 38"
           fill="none"
           xmlns="http://www.w3.org/2000/svg"
-          aria-label="NORMIA"
+          aria-label="SellSys"
         >
           <rect x="0" y="2" width="3" height="34" fill="#6C63FF" />
           <text
@@ -2688,7 +2688,7 @@ export default function AppShell() {
             letterSpacing="1.5"
             fill="#E8ECFF"
           >
-            NORMIA
+            SellSys
           </text>
           <text
             x="12"
@@ -2811,6 +2811,8 @@ export default function AppShell() {
           <SpecsView />                              
           ) : currentSection?.key === "stock" && activeSubKey === "balances" ? (
             <BalancesView />                                   
+          ) : currentSection?.key === "stock" && activeSubKey === "moves" ? (
+            <StockMovesView />
           ) : currentSection?.key === "settings" && activeSubKey === "uom" ? (
             <div className="settings-wrap">
               <SettingsUoms />
@@ -3793,10 +3795,11 @@ function SettingsUsers() {
 function BalancesView() {
   const [materials] = useLocalState<Material[]>("mrp.materials.v1", []);
   const [products]  = useLocalState<Product[]>("mrp.products.v1", []);
+  const [semis]     = useLocalState<Semi[]>("mrp.semis.v1", []);
   const { warehouses, physical, virtual } = useSupabaseWarehouses();
   const { balances } = useStockRepo();
 
-  const [typeFilter, setTypeFilter] = useState<"all"|"material"|"product">("all");
+  const [typeFilter, setTypeFilter] = useState<"all"|"material"|"product"|"semi">("all");
   const [whFilter, setWhFilter] = useState<string>("");
   const [q, setQ] = useState("");
 
@@ -3804,6 +3807,9 @@ function BalancesView() {
     if (b.itemType === "material") {
       const m = materials.find(x => x.id === b.itemId);
       return { code: m?.code ?? "", name: m?.name ?? "", uom: m?.uom ?? "" };
+    } else if (b.itemType === "semi") {
+      const s = semis.find(x => x.id === b.itemId);
+      return { code: s?.code ?? "", name: s?.name ?? "", uom: s?.uom ?? "" };
     } else {
       const p = products.find(x => x.id === b.itemId);
       return { code: p?.code ?? "", name: p?.name ?? "", uom: p?.uom ?? "" };
@@ -3833,6 +3839,7 @@ function BalancesView() {
           <option value="all">Все</option>
           <option value="material">Материалы</option>
           <option value="product">Товары</option>
+          <option value="semi">Полуфабрикаты</option>
         </select>
 
         <select className="mrp-select" value={whFilter} onChange={e => setWhFilter(e.target.value)}>
@@ -3867,7 +3874,9 @@ function BalancesView() {
           <tbody>
             {rows.map(r => (
               <tr key={r.b.id} className="border-t border-slate-100">
-                <td className="px-3 py-2">{r.b.itemType === "material" ? "M" : "P"}</td>
+                <td className="px-3 py-2">
+                  {r.b.itemType === "material" ? "M" : r.b.itemType === "semi" ? "S" : "P"}
+                </td>
                 <td className="px-3 py-2">{r.code}</td>
                 <td className="px-3 py-2">{r.name}</td>
                 <td className="px-3 py-2">{r.uom}</td>
@@ -3884,6 +3893,355 @@ function BalancesView() {
   );
 }
 
+
+
+function StockMovesView() {
+  type ItemKind = "product" | "material" | "semi";
+  type ItemRow = { id: string; code: string; name: string; kind: ItemKind; uom?: string };
+  type TransferRow = {
+    id: string;
+    itemId: string;
+    qty: number;
+    fromId?: string;
+    toId?: string;
+    createdAt: string;
+  };
+
+  const { warehouses } = useSupabaseWarehouses();
+  const [items, setItems] = useState<ItemRow[]>([]);
+  const [itemsLoading, setItemsLoading] = useState(false);
+  const [transfers, setTransfers] = useState<TransferRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [kind, setKind] = useState<ItemKind>("product");
+  const [itemId, setItemId] = useState("");
+  const [fromId, setFromId] = useState("");
+  const [toId, setToId] = useState("");
+  const [qty, setQty] = useState("");
+  const [dateISO, setDateISO] = useState(() => new Date().toISOString().slice(0, 10));
+  const [search, setSearch] = useState("");
+  const [balances, setBalances] = useStockBalances();
+
+  const whName = useCallback(
+    (id?: string) => {
+      if (!id) return "";
+      const w = warehouses.find((x) => x.id === id);
+      if (!w) return "";
+      if (w.type === "virtual" && w.parentId) {
+        const parent = warehouses.find((x) => x.id === w.parentId);
+        return parent ? `${parent.name} / ${w.name}` : w.name;
+      }
+      return w.name;
+    },
+    [warehouses]
+  );
+
+  const itemsById = useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
+  const filteredItems = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return items
+      .filter((i) => i.kind === kind)
+      .filter((i) => !q || `${i.code} ${i.name}`.toLowerCase().includes(q))
+      .sort((a, b) => a.code.localeCompare(b.code, "ru", { sensitivity: "base" }));
+  }, [items, kind, search]);
+
+  const availableQty = useMemo(() => {
+    if (!itemId || !fromId) return null;
+    const row = balances.find((b) => b.itemId === itemId && b.warehouseId === fromId);
+    return row?.qty ?? null;
+  }, [balances, fromId, itemId]);
+
+  const refreshItems = useCallback(async () => {
+    setItemsLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("items")
+        .select("id, code, name, kind, uom")
+        .in("kind", ["product", "material", "semi"])
+        .order("code", { ascending: true });
+      if (error) throw error;
+      const mapped = (data || []).map((row: any) => ({
+        id: row.id,
+        code: row.code,
+        name: row.name,
+        kind: row.kind as ItemKind,
+        uom: row.uom ?? undefined,
+      }));
+      setItems(mapped);
+    } catch (err) {
+      console.error("moves: load items", err);
+      alert("Не удалось загрузить номенклатуру");
+    } finally {
+      setItemsLoading(false);
+    }
+  }, []);
+
+  const refreshTransfers = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("stock_movements")
+        .select("doc_id, item_id, warehouse_id, qty, created_at")
+        .eq("doc_type", "transfer")
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (error) throw error;
+      const groups = new Map<string, TransferRow & { rows: any[] }>();
+      (data || []).forEach((row: any) => {
+        const key = String(row.doc_id || "");
+        if (!key) return;
+        if (!groups.has(key)) {
+          groups.set(key, {
+            id: key,
+            itemId: row.item_id,
+            qty: 0,
+            createdAt: row.created_at ?? new Date().toISOString(),
+            rows: [],
+          });
+        }
+        const g = groups.get(key)!;
+        g.rows.push(row);
+        if (row.created_at && row.created_at > g.createdAt) g.createdAt = row.created_at;
+        if (!g.itemId) g.itemId = row.item_id;
+      });
+      const mapped = Array.from(groups.values()).map((g) => {
+        const from = g.rows.find((r) => Number(r.qty) < 0);
+        const to = g.rows.find((r) => Number(r.qty) > 0);
+        return {
+          id: g.id,
+          itemId: g.itemId,
+          qty: Math.abs(Number(from?.qty ?? to?.qty ?? 0)),
+          fromId: from?.warehouse_id ?? undefined,
+          toId: to?.warehouse_id ?? undefined,
+          createdAt: g.createdAt,
+        };
+      });
+      setTransfers(mapped);
+    } catch (err) {
+      console.error("moves: load transfers", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const refreshBalances = useCallback(async () => {
+    if (!items.length) return;
+    const { data, error } = await supabase
+      .from("stock_balances")
+      .select("item_id, warehouse_id, qty, updated_at");
+    if (error) {
+      console.error("moves: load stock_balances", error);
+      return;
+    }
+    const next = (data || [])
+      .map((row: any) => {
+        const item = itemsById.get(row.item_id);
+        if (!item) return null;
+        return {
+          id: `${row.warehouse_id}:${row.item_id}`,
+          itemType: item.kind,
+          itemId: row.item_id,
+          warehouseId: row.warehouse_id,
+          qty: Number(row.qty) || 0,
+          updatedAt: row.updated_at ?? new Date().toISOString(),
+        } as StockBalance;
+      })
+      .filter(Boolean) as StockBalance[];
+    setBalances(next);
+  }, [items, itemsById, setBalances]);
+
+  useEffect(() => {
+    refreshItems();
+    refreshTransfers();
+  }, [refreshItems, refreshTransfers]);
+
+  useEffect(() => {
+    if (items.length) refreshBalances();
+  }, [items.length, refreshBalances]);
+
+  const submitMove = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!itemId) {
+      alert("Выбери номенклатуру");
+      return;
+    }
+    if (!fromId || !toId || fromId === toId) {
+      alert("Укажи разные склады отправки и получения");
+      return;
+    }
+    const qtyNum = Number(String(qty).replace(",", "."));
+    if (!Number.isFinite(qtyNum) || qtyNum <= 0) {
+      alert("Количество должно быть больше 0");
+      return;
+    }
+    setSaving(true);
+    try {
+      const { data: balRow, error: balErr } = await supabase
+        .from("stock_balances")
+        .select("qty")
+        .eq("item_id", itemId)
+        .eq("warehouse_id", fromId)
+        .maybeSingle();
+      if (balErr) throw balErr;
+      const available = Number(balRow?.qty ?? 0);
+      if (available < qtyNum) {
+        const ok = window.confirm(`На складе только ${available}. Всё равно переместить?`);
+        if (!ok) return;
+      }
+
+      const docId = generateUuid();
+      const createdAt = dateISO ? new Date(`${dateISO}T00:00:00`).toISOString() : new Date().toISOString();
+      const payload = [
+        { doc_type: "transfer", doc_id: docId, item_id: itemId, warehouse_id: fromId, qty: -qtyNum, created_at: createdAt },
+        { doc_type: "transfer", doc_id: docId, item_id: itemId, warehouse_id: toId, qty: qtyNum, created_at: createdAt },
+      ];
+      const { error } = await supabase.from("stock_movements").insert(payload);
+      if (error) throw error;
+      await refreshTransfers();
+      await refreshBalances();
+      setQty("");
+    } catch (err) {
+      console.error("moves: save transfer", err);
+      alert("Не удалось сохранить перемещение");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mrp-page">
+      <div className="mrp-page-head">
+        <div className="mrp-title-row">
+          <h1 className="mrp-title">Перемещения</h1>
+          <span className="mrp-count">{transfers.length}</span>
+        </div>
+      </div>
+
+      <div className="mrp-card space-y-4">
+        <form onSubmit={submitMove} className="grid gap-3 md:grid-cols-6">
+          <div className="md:col-span-1">
+            <Label>Тип</Label>
+            <select className="mrp-select w-full" value={kind} onChange={(e) => setKind(e.target.value as ItemKind)}>
+              <option value="product">Товар</option>
+              <option value="material">Материал</option>
+              <option value="semi">Полуфабрикат</option>
+            </select>
+          </div>
+
+          <div className="md:col-span-2">
+            <Label>Номенклатура</Label>
+            <select className="mrp-select w-full" value={itemId} onChange={(e) => setItemId(e.target.value)}>
+              <option value="">{itemsLoading ? "Загрузка…" : "Выбери"}</option>
+              {filteredItems.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.code} — {i.name}
+                </option>
+              ))}
+            </select>
+            <input
+              className="form-control mt-2 w-full"
+              placeholder="Быстрый поиск по коду/наименованию"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+
+          <div className="md:col-span-1">
+            <Label>Откуда</Label>
+            <select className="mrp-select w-full" value={fromId} onChange={(e) => setFromId(e.target.value)}>
+              <option value="">Выбери склад</option>
+              {warehouses.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {whName(w.id)}
+                </option>
+              ))}
+            </select>
+            {availableQty != null && (
+              <div className="text-xs text-slate-400 mt-1">Остаток: {availableQty}</div>
+            )}
+          </div>
+
+          <div className="md:col-span-1">
+            <Label>Куда</Label>
+            <select className="mrp-select w-full" value={toId} onChange={(e) => setToId(e.target.value)}>
+              <option value="">Выбери склад</option>
+              {warehouses.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {whName(w.id)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="md:col-span-1">
+            <Label>Кол-во</Label>
+            <input
+              className="form-control w-full"
+              inputMode="decimal"
+              value={qty}
+              onChange={(e) => setQty(e.target.value)}
+              placeholder="0"
+            />
+          </div>
+
+          <div className="md:col-span-1">
+            <Label>Дата</Label>
+            <input className="form-control w-full" type="date" value={dateISO} onChange={(e) => setDateISO(e.target.value)} />
+          </div>
+
+          <div className="md:col-span-6 flex items-center justify-end gap-2">
+            <button type="button" className="mrp-btn mrp-btn--ghost" onClick={refreshTransfers} disabled={loading}>
+              {loading ? "Обновляем…" : "Обновить"}
+            </button>
+            <button type="submit" className="mrp-btn mrp-btn--primary" disabled={saving}>
+              {saving ? "Сохраняем…" : "Переместить"}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div className="mrp-card mt-4">
+        <div className="mrp-hscroll">
+          <table className="mrp-table text-sm">
+            <thead>
+              <tr>
+                <th className="text-left px-2 py-2">Дата</th>
+                <th className="text-left px-2 py-2">Номенклатура</th>
+                <th className="text-left px-2 py-2">Откуда</th>
+                <th className="text-left px-2 py-2">Куда</th>
+                <th className="text-right px-2 py-2">Кол-во</th>
+              </tr>
+            </thead>
+            <tbody>
+              {transfers.length ? (
+                transfers.map((t) => {
+                  const item = itemsById.get(t.itemId);
+                  return (
+                    <tr key={t.id} className="border-t border-slate-100">
+                      <td className="px-2 py-2">{new Date(t.createdAt).toLocaleString("ru-RU")}</td>
+                      <td className="px-2 py-2">
+                        {item ? `${item.code} — ${item.name}` : t.itemId}
+                      </td>
+                      <td className="px-2 py-2">{whName(t.fromId) || "—"}</td>
+                      <td className="px-2 py-2">{whName(t.toId) || "—"}</td>
+                      <td className="px-2 py-2 text-right">{t.qty}</td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={5} className="px-2 py-8 text-center text-slate-400">
+                    {loading ? "Загружаем…" : "Перемещений нет"}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 
 
