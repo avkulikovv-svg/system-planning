@@ -2364,6 +2364,8 @@ export default function AppShell() {
   const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
+  const [avatarOpen, setAvatarOpen] = useState(false);
+  const avatarRef = useRef<HTMLDivElement | null>(null);
 
   const [activeSectionKey, setActiveSectionKey] = useLocalState<string>("mrp.activeSection", nav[0]?.key ?? "mfg");
   const currentSection = useMemo(
@@ -2381,6 +2383,18 @@ export default function AppShell() {
       setActiveSubKey(currentSection?.subs?.[0]?.key ?? "");
     }
   }, [activeSectionKey]); // eslint-disable-line
+
+  const userLabel = profile?.email ?? session?.user?.email ?? "";
+  const userInitials = useMemo(() => {
+    const raw = (userLabel ?? "").trim();
+    if (!raw) return "U";
+    const namePart = raw.split("@")[0];
+    const parts = namePart.split(/[.\s_-]+/).filter(Boolean);
+    if (parts.length >= 2) {
+      return `${parts[0][0] ?? ""}${parts[1][0] ?? ""}`.toUpperCase();
+    }
+    return namePart.slice(0, 2).toUpperCase();
+  }, [userLabel]);
 
   useEffect(() => {
     let mounted = true;
@@ -2467,6 +2481,31 @@ export default function AppShell() {
       setAuthLoading(false);
     }
   };
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    setAvatarOpen(false);
+  };
+
+  const handleSwitchAccount = async () => {
+    await supabase.auth.signOut();
+    setAuthEmail("");
+    setAuthPassword("");
+    setAuthMode("signin");
+    setAvatarOpen(false);
+  };
+
+  useEffect(() => {
+    if (!avatarOpen) return;
+    const handleClick = (event: MouseEvent) => {
+      if (!avatarRef.current) return;
+      if (event.target instanceof Node && !avatarRef.current.contains(event.target)) {
+        setAvatarOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [avatarOpen]);
 
   const pill = (isActive?: boolean) => `app-pill app-pill--md ${isActive ? "is-active" : ""}`;
 
@@ -2611,7 +2650,30 @@ export default function AppShell() {
                 <input placeholder="Быстрый поиск…" />
                 <span className="mrp-kbd">⌘K</span>
               </div>
-              <div className="mrp-avatar">AK</div>
+              <div className="mrp-avatar-wrap" ref={avatarRef}>
+                <button
+                  type="button"
+                  className="mrp-avatar-btn"
+                  onClick={() => setAvatarOpen((prev) => !prev)}
+                  aria-haspopup="menu"
+                  aria-expanded={avatarOpen}
+                >
+                  <span className="mrp-avatar">{userInitials}</span>
+                </button>
+                {avatarOpen && (
+                  <div className="mrp-avatar-menu" role="menu">
+                    <div className="mrp-avatar-meta">
+                      <div className="mrp-avatar-name">{userLabel || "Пользователь"}</div>
+                    </div>
+                    <button type="button" className="mrp-avatar-item" onClick={handleSwitchAccount}>
+                      Сменить аккаунт
+                    </button>
+                    <button type="button" className="mrp-avatar-item is-danger" onClick={handleSignOut}>
+                      Выйти
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
           <div className="mrp-subnav">
