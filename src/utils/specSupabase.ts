@@ -1,5 +1,5 @@
 import { supabase } from "../api/supabaseClient";
-import { generateUuid, isUuid, resolveItemUuid } from "./supabaseItems";
+import { isUuid, resolveItemUuid } from "./supabaseItems";
 
 type SpecLineInput = {
   id?: string;
@@ -105,8 +105,8 @@ export async function fetchSpecsFromSupabase(
 
   const mapped = (specsData || []).map((row: any) => ({
     id: row.id as string,
-    specCode: row.spec_code as string,
-    specName: row.spec_name as string,
+    specCode: (row.spec_code as string | undefined)?.trim() || "",
+    specName: (row.spec_name as string | undefined)?.trim() || "",
     linkedProductId: row.linked_product_id as string | null,
     version: row.version ?? null,
     effectiveFrom: row.effective_from ?? null,
@@ -129,7 +129,8 @@ export async function fetchSpecsFromSupabase(
   const seen = new Set<string>();
   const latest: SpecRecord[] = [];
   for (const row of sorted) {
-    const key = row.linkedProductId || row.specCode;
+    const rawKey = row.linkedProductId || row.specCode;
+    const key = rawKey?.toString().trim().toLowerCase();
     if (!key || seen.has(key)) continue;
     seen.add(key);
     latest.push(row);
@@ -146,23 +147,6 @@ const findSource = (ctx: SpecContext, kind: "mat" | "semi", id?: string) => {
 export async function upsertSpecSupabase(spec: SpecInput, ctx: SpecContext): Promise<string> {
   const specCodeRaw = spec.productCode?.trim() || spec.id || "";
   const specCode = specCodeRaw ? specCodeRaw : `SPEC-${Date.now()}`;
-  let specId = spec.id && isUuid(spec.id) ? spec.id : null;
-  let nextVersion = 1;
-
-  const { data: latestSpec, error: selectErr } = await supabase
-    .from("specs")
-    .select("id, version, linked_product_id")
-    .eq("spec_code", specCode)
-    .order("version", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (selectErr) throw selectErr;
-  if (latestSpec?.id) {
-    nextVersion = Number(latestSpec.version ?? 0) + 1;
-    specId = generateUuid();
-  } else if (!specId) {
-    specId = generateUuid();
-  }
 
   let linkedProductUuid: string | null = null;
   const legacyProductId = spec.productId?.trim();
@@ -179,9 +163,6 @@ export async function upsertSpecSupabase(spec: SpecInput, ctx: SpecContext): Pro
       console.warn("upsertSpecSupabase: resolve product uuid failed", err);
       linkedProductUuid = null;
     }
-  }
-  if (!linkedProductUuid && latestSpec?.linked_product_id) {
-    linkedProductUuid = latestSpec.linked_product_id as string;
   }
 
   const vendorNameById = new Map(ctx.vendors?.map((v) => [v.id, v.name]));
@@ -207,8 +188,6 @@ export async function upsertSpecSupabase(spec: SpecInput, ctx: SpecContext): Pro
     });
     if (!itemUuid) continue;
     linePayload.push({
-      id: generateUuid(),
-      spec_id: specId,
       kind,
       ref_item_id: itemUuid,
       qty: line.qty,
@@ -216,29 +195,15 @@ export async function upsertSpecSupabase(spec: SpecInput, ctx: SpecContext): Pro
     });
   }
 
-  const specRecord = {
-    id: specId,
-    linked_product_id: linkedProductUuid,
-    spec_code: specCode,
-    spec_name: spec.productName?.trim() || specCode,
-    version: nextVersion,
-    effective_from: spec.effectiveFrom || new Date().toISOString().slice(0, 10),
-    updated_at: new Date().toISOString(),
-  };
-
-  const { error: specErr } = await supabase
-    .from("specs")
-    .insert(specRecord);
-  if (specErr) throw specErr;
-
-  if (linePayload.length) {
-    const { error: linesErr } = await supabase
-      .from("spec_lines")
-      .insert(linePayload);
-    if (linesErr) throw linesErr;
-  }
-
-  return specId;
+  const { data, error } = await supabase.rpc("upsert_spec_with_lines", {
+    p_spec_code: specCode,
+    p_spec_name: spec.productName?.trim() || specCode,
+    p_linked_product_id: linkedProductUuid,
+    p_effective_from: spec.effectiveFrom || new Date().toISOString().slice(0, 10),
+    p_lines: linePayload,
+  });
+  if (error) throw error;
+  return data as string;
 }
 
 type DeleteFilter = {

@@ -4258,6 +4258,7 @@ function ProdReportsView() {
     id: string;
     number: string;
     dateISO: string;
+    createdAt?: string | null;
     qty: number;
     status: string;
     kind: "fg" | "semi" | "scrap";
@@ -4284,9 +4285,9 @@ function ProdReportsView() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [sortState, setSortState] = useState<{
-    key: "number" | "product";
+    key: "date" | "number" | "product";
     dir: "asc" | "desc";
-  }>({ key: "number", dir: "desc" });
+  }>({ key: "date", dir: "desc" });
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [adjustRow, setAdjustRow] = useState<ReportRow | null>(null);
   const [adjustQty, setAdjustQty] = useState("");
@@ -4357,6 +4358,7 @@ function ProdReportsView() {
           date_iso,
           qty,
           status,
+          created_at,
           plan_kind,
           plan_item_id,
           plan_date,
@@ -4377,6 +4379,7 @@ function ProdReportsView() {
           number,
           date_iso,
           qty,
+          created_at,
           phys_warehouse_id,
           mat_zone_id,
           semi_zone_id,
@@ -4436,6 +4439,7 @@ function ProdReportsView() {
         id: row.id,
         number: row.number,
         dateISO: row.date_iso,
+        createdAt: row.created_at ?? null,
         qty: Number(row.qty) || 0,
         status: row.status ?? "posted",
         kind: row.plan_kind === "semi" ? "semi" : "fg",
@@ -4456,6 +4460,7 @@ function ProdReportsView() {
         id: row.id,
         number: row.number,
         dateISO: row.date_iso,
+        createdAt: row.created_at ?? null,
         qty: Number(row.qty) || 0,
         status: "posted",
         kind: "scrap",
@@ -4476,6 +4481,7 @@ function ProdReportsView() {
         id: row.id,
         number: `ADJ-${String(row.report_id || row.id).slice(0, 6).toUpperCase()}`,
         dateISO: row.created_at ?? row.plan_date ?? row.plan_date,
+        createdAt: row.created_at ?? null,
         qty: Number(row.delta_qty) || 0,
         status: "adjustment",
         kind: row.plan_kind === "semi" ? "semi" : "fg",
@@ -4496,6 +4502,7 @@ function ProdReportsView() {
         id: row.id,
         number: `ADJ-${String(row.report_id || row.id).slice(0, 6).toUpperCase()}`,
         dateISO: row.created_at ?? row.plan_date ?? row.plan_date,
+        createdAt: row.created_at ?? null,
         qty: Number(row.delta_qty) || 0,
         status: "adjustment",
         kind: "scrap",
@@ -4552,14 +4559,14 @@ function ProdReportsView() {
     );
   });
 
-  const handleSort = (key: "number" | "product") => {
+  const handleSort = (key: "date" | "number" | "product") => {
     setSortState((prev) => {
       if (prev.key !== key) return { key, dir: "asc" };
       return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
     });
   };
 
-  const sortArrows = (key: "number" | "product") => {
+  const sortArrows = (key: "date" | "number" | "product") => {
     const isActive = sortState.key === key;
     return (
       <span className={`wbwh-sort ${isActive ? "is-active" : ""}`} aria-hidden="true">
@@ -4571,6 +4578,15 @@ function ProdReportsView() {
 
   const sorted = React.useMemo(() => {
     const dir = sortState.dir === "asc" ? 1 : -1;
+    if (sortState.key === "date") {
+      return [...filtered].sort((a, b) => {
+        const aValue = a.createdAt ?? a.dateISO;
+        const bValue = b.createdAt ?? b.dateISO;
+        const aTime = aValue ? new Date(aValue).getTime() : 0;
+        const bTime = bValue ? new Date(bValue).getTime() : 0;
+        return (aTime - bTime) * dir;
+      });
+    }
     const getValue = (r: ReportRow) => {
       if (sortState.key === "product") {
         return r.product ? `${r.product.code} ${r.product.name}` : "";
@@ -4792,8 +4808,8 @@ function ProdReportsView() {
           <table className="mrp-table text-sm table-compact">
             <thead>
               <tr>
-                <th className="text-left px-3 py-2 wbwh-sortable" onClick={() => handleSort("number")}>
-                  Номер / Дата{sortArrows("number")}
+                <th className="text-left px-3 py-2 wbwh-sortable" onClick={() => handleSort("date")}>
+                  Дата / Номер{sortArrows("date")}
                 </th>
                 <th className="text-left px-3 py-2 wbwh-sortable" onClick={() => handleSort("product")}>
                   Товар{sortArrows("product")}
@@ -4811,10 +4827,10 @@ function ProdReportsView() {
               {sorted.map((d) => (
                 <tr key={d.id} className="border-t border-slate-100">
                   <td className="px-3 py-2">
-                    <div className="font-medium">{d.number}</div>
-                    <div className="text-slate-500 text-xs">
-                      {new Date(d.dateISO).toLocaleString("ru-RU")}
+                    <div className="font-medium">
+                      {new Date(d.createdAt ?? d.dateISO).toLocaleString("ru-RU")}
                     </div>
+                    <div className="text-slate-500 text-xs">{d.number}</div>
                   </td>
                   <td className="px-3 py-2">
                     <div className="flex flex-col gap-1">

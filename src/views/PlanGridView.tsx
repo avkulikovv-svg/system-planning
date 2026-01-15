@@ -838,7 +838,7 @@ function PlanGridView() {
     [planMapFG, perUnitById]
   );
 
-  const handlePlanChange = (id: string, dateISO: string, val: number) => {
+  const handlePlanChange = async (id: string, dateISO: string, val: number) => {
     if (!physTarget) {
       alert("Не выбран склад.");
       return;
@@ -885,15 +885,17 @@ function PlanGridView() {
           } else {
             // 1) Обнуляем текущую ячейку
             updatePlanLocal(scope, id, dateISO, 0);
-            upsertPlanValue(scope, id, dateISO, 0, physTarget);
+            await upsertPlanValue(scope, id, dateISO, 0, physTarget);
             // 2) Ставим план ГП на предложенную дату
             updatePlanLocal(scope, id, suggestDate, val);
-            upsertPlanValue(scope, id, suggestDate, val, physTarget);
+            await upsertPlanValue(scope, id, suggestDate, val, physTarget);
             // 3) Ставим планы ПФ на исходную дату на размер дефицита
-            shortages.forEach((s) => {
+            for (const s of shortages) {
               updatePlanLocal("semi", s.sid, dateISO, s.deficit);
-              upsertPlanValue("semi", s.sid, dateISO, s.deficit, physTarget);
-            });
+              await upsertPlanValue("semi", s.sid, dateISO, s.deficit, physTarget);
+            }
+            await Promise.all([fetchPlans("fg"), fetchPlans("semi")]);
+            await refreshStockBalances(true);
             return;
           }
         }
@@ -901,7 +903,9 @@ function PlanGridView() {
     }
 
     updatePlanLocal(scope, id, dateISO, val);
-    upsertPlanValue(scope, id, dateISO, val, physTarget);
+    await upsertPlanValue(scope, id, dateISO, val, physTarget);
+    await fetchPlans(scope);
+    await refreshStockBalances(true);
   };
 
   type CovCell = { ok: boolean; canMake: number; title: string };
@@ -1149,7 +1153,7 @@ function PlanGridView() {
       if (error) throw error;
       updateFactLocal(scope, id, dateISO, nextVal);
       await fetchPlans(scope);
-      await refreshStockBalances();
+      await refreshStockBalances(true);
     } catch (err: any) {
       console.error("post_production_report", err);
       alert("Не удалось провести факт через Supabase RPC, см. консоль.");
@@ -1218,7 +1222,7 @@ function PlanGridView() {
 
       updateScrapLocal(scope, id, dateISO, nextVal);
       await fetchPlans(scope);
-      await refreshStockBalances();
+      await refreshStockBalances(true);
     } catch (err: any) {
       console.error("post_production_scrap", err);
       alert("Не удалось провести брак через Supabase RPC, см. консоль.");

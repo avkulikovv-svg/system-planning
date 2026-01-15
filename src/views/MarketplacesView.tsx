@@ -393,13 +393,14 @@ export function MarketplacesView() {
   const [hasSupplyBoxType, setHasSupplyBoxType] = React.useState(true);
   const [warehouseUpdating, setWarehouseUpdating] = React.useState<string | null>(null);
 
-  const loadData = React.useCallback(async () => {
+  const loadData = React.useCallback(async (options?: { force?: boolean }) => {
     setError(null);
-    const cached = readMarketplacesCache();
+    const force = Boolean(options?.force);
+    const cached = force ? null : readMarketplacesCache();
     const nowTs = Date.now();
-    const hasFreshStatic = Boolean(cached && nowTs - cached.tsStatic < MARKETPLACES_STATIC_TTL_MS);
-    const hasFreshDynamic = Boolean(cached && nowTs - cached.tsDynamic < MARKETPLACES_DYNAMIC_TTL_MS);
-    const usedCache = Boolean(cached && (hasFreshStatic || hasFreshDynamic));
+    const hasFreshStatic = Boolean(!force && cached && nowTs - cached.tsStatic < MARKETPLACES_STATIC_TTL_MS);
+    const hasFreshDynamic = Boolean(!force && cached && nowTs - cached.tsDynamic < MARKETPLACES_DYNAMIC_TTL_MS);
+    const usedCache = Boolean(!force && cached && (hasFreshStatic || hasFreshDynamic));
 
     if (usedCache && cached) {
       const state = buildMarketplaceState({
@@ -1110,9 +1111,11 @@ export function MarketplacesView() {
     setSyncing(true);
     try {
       await syncMarketplaceSupplyPlans("OZON");
+      return true;
     } catch (err: any) {
       console.error("sync marketplace plans", err);
       setError(err?.message ?? "Не удалось обновить Ozon");
+      return false;
     } finally {
       setSyncing(false);
     }
@@ -1122,9 +1125,11 @@ export function MarketplacesView() {
     setSyncingWb(true);
     try {
       await syncMarketplaceSupplyPlans("WB");
+      return true;
     } catch (err: any) {
       console.error("sync marketplace plans", err);
       setError(err?.message ?? "Не удалось обновить WB");
+      return false;
     } finally {
       setSyncingWb(false);
     }
@@ -1550,14 +1555,20 @@ export function MarketplacesView() {
             <div className="panel-actions__group">
               <button
                 className="mrp-btn mrp-btn--primary"
-                onClick={async () => { await syncOzon(); await loadData(); }}
+                onClick={async () => {
+                  const ok = await syncOzon();
+                  if (ok) await loadData({ force: true });
+                }}
                 disabled={syncing || loading}
               >
                 {syncing ? "Обновление Ozon…" : "Обновить Ozon"}
               </button>
               <button
                 className="mrp-btn mrp-btn--primary"
-                onClick={async () => { await syncWb(); await loadData(); }}
+                onClick={async () => {
+                  const ok = await syncWb();
+                  if (ok) await loadData({ force: true });
+                }}
                 disabled={syncingWb || loading}
               >
                 {syncingWb ? "Обновление WB…" : "Обновить WB"}

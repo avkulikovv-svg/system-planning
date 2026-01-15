@@ -57,18 +57,35 @@ const WB_TIMEZONE = "Europe/Moscow";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
 const OZON_CLIENT_ID = Deno.env.get("OZON_CLIENT_ID");
 const OZON_API_KEY = Deno.env.get("OZON_API_KEY");
 const WB_API_TOKEN = Deno.env.get("WB_API_TOKEN");
 const WB_CONTENT_TOKEN = Deno.env.get("WB_CONTENT_TOKEN");
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
+if (!SUPABASE_URL) {
+  throw new Error("SUPABASE_URL must be set");
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { persistSession: false },
-});
+type SupabaseClient = ReturnType<typeof createClient>;
+
+const getAdminClient = (): SupabaseClient | null => {
+  if (!SUPABASE_SERVICE_ROLE_KEY) return null;
+  return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false },
+  });
+};
+
+const getUserClient = (authHeader: string): SupabaseClient => {
+  if (!SUPABASE_ANON_KEY) {
+    throw new Error("SUPABASE_ANON_KEY must be set for user auth");
+  }
+  const headers: Record<string, string> = { Authorization: authHeader };
+  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: { persistSession: false },
+    global: { headers },
+  });
+};
 
 const OZON_BASE = "https://api-seller.ozon.ru";
 const WB_BASE = "https://supplies-api.wildberries.ru";
@@ -119,7 +136,7 @@ const extractDateISO = (raw?: string) => {
   return m ? m[1] : null;
 };
 
-const getDefaultPhysicalWarehouseId = async () => {
+const getDefaultPhysicalWarehouseId = async (supabase: SupabaseClient) => {
   const { data: defaultWh, error: defaultErr } = await supabase
     .from("warehouses")
     .select("id")
@@ -401,7 +418,7 @@ const aggregateSupplyItems = (items: Record<string, unknown>[]) => {
   return Array.from(map.values());
 };
 
-const fetchChannelId = async (code: ChannelCode) => {
+const fetchChannelId = async (supabase: SupabaseClient, code: ChannelCode) => {
   const { data, error } = await supabase
     .from("mp_channels")
     .select("id")
@@ -474,7 +491,7 @@ const ensurePalletMetaDefaults = (meta?: DestinationMeta | null) => {
   return { meta: base, changed };
 };
 
-const fetchDestinationsMap = async (channelId: string) => {
+const fetchDestinationsMap = async (supabase: SupabaseClient, channelId: string) => {
   const { data, error } = await supabase
     .from("mp_destinations")
     .select("id, external_id, name, meta")
@@ -490,6 +507,7 @@ const fetchDestinationsMap = async (channelId: string) => {
 };
 
 const ensureDestination = async (
+  supabase: SupabaseClient,
   channelId: string,
   destMap: Map<string, { id: string; name: string; meta?: DestinationMeta | null }>,
   externalId?: string,
@@ -533,7 +551,7 @@ const ensureDestination = async (
   return data.id as string;
 };
 
-const fetchItemMap = async (barcodes: string[]) => {
+const fetchItemMap = async (supabase: SupabaseClient, barcodes: string[]) => {
   const barcodeList = Array.from(new Set(barcodes.map((b) => String(b).trim()).filter(Boolean)));
   const byBarcode = new Map<string, { itemId: string }>();
   const itemById = new Map<string, { ozonSku?: string | null; wbSku?: string | null }>();
@@ -595,7 +613,7 @@ const fetchItemMap = async (barcodes: string[]) => {
   return { byBarcode, itemById };
 };
 
-const updateOzonSkus = async (updates: Array<{ id: string; ozon_sku: string }>) => {
+const updateOzonSkus = async (supabase: SupabaseClient, updates: Array<{ id: string; ozon_sku: string }>) => {
   if (!updates.length) return { updated: 0 };
   let updated = 0;
   for (const row of updates) {
@@ -609,7 +627,7 @@ const updateOzonSkus = async (updates: Array<{ id: string; ozon_sku: string }>) 
   return { updated };
 };
 
-const updateWbSkus = async (updates: Array<{ id: string; wb_sku: string }>) => {
+const updateWbSkus = async (supabase: SupabaseClient, updates: Array<{ id: string; wb_sku: string }>) => {
   if (!updates.length) return { updated: 0 };
   let updated = 0;
   for (const row of updates) {
@@ -623,12 +641,12 @@ const updateWbSkus = async (updates: Array<{ id: string; wb_sku: string }>) => {
   return { updated };
 };
 
-const syncOzonSupplyPlans = async () => {
+const syncOzonSupplyPlans = async (supabase: SupabaseClient) => {
   const MAX_ORDERS_PER_RUN = 20;
   const startedAt = Date.now();
   logStep("ozon sync start");
-  const channelId = await fetchChannelId("OZON");
-  const destMap = await fetchDestinationsMap(channelId);
+  const channelId = await fetchChannelId(supabase, "OZON");
+  const destMap = await fetchDestinationsMap(supabase, channelId);
 
   const ids = await listFboSupplyOrderIds();
   logStep("ozon list ids done", { count: ids.length });
@@ -714,7 +732,7 @@ const syncOzonSupplyPlans = async () => {
 
   if (!orderItems.length) return { imported: 0, skipped: 0, unknown: 0 };
 
-  const { byBarcode, itemById } = await fetchItemMap(Array.from(allBarcodes));
+  const { byBarcode, itemById } = await fetchItemMap(supabase, Array.from(allBarcodes));
   logStep("ozon barcodes mapped", { barcodes: byBarcode.size, items: itemById.size });
   const nowIso = new Date().toISOString();
   const supplyRows: any[] = [];
@@ -749,6 +767,7 @@ const syncOzonSupplyPlans = async () => {
     })();
 
     const destinationId = await ensureDestination(
+      supabase,
       channelId,
       destMap,
       order.dest_warehouse_id,
@@ -809,7 +828,7 @@ const syncOzonSupplyPlans = async () => {
     for (const row of skuUpdates) {
       if (!dedup.has(row.id)) dedup.set(row.id, row.ozon_sku);
     }
-    await updateOzonSkus(Array.from(dedup, ([id, ozon_sku]) => ({ id, ozon_sku })));
+    await updateOzonSkus(supabase, Array.from(dedup, ([id, ozon_sku]) => ({ id, ozon_sku })));
     logStep("ozon sku updates", { count: dedup.size });
   }
 
@@ -906,7 +925,7 @@ const syncOzonSupplyPlans = async () => {
     }
 
     if (shippedPlans.length) {
-      const warehouseId = await getDefaultPhysicalWarehouseId();
+      const warehouseId = await getDefaultPhysicalWarehouseId(supabase);
 
       if (warehouseId) {
         const planIds = shippedPlans.map((p) => p.id);
@@ -1039,7 +1058,7 @@ const syncOzonSupplyPlans = async () => {
   }
 
   if (shippedRows.length) {
-    const warehouseId = await getDefaultPhysicalWarehouseId();
+    const warehouseId = await getDefaultPhysicalWarehouseId(supabase);
     if (warehouseId) {
       const shippedByExt = new Map<string, string[]>();
       for (const row of shippedRows) {
@@ -1223,9 +1242,9 @@ const getWbSupplyGoods = async (supplyId: string) => {
   return Array.isArray(goods) ? goods : [];
 };
 
-const syncWbSupplyPlans = async (statusIds: number[]) => {
-  const channelId = await fetchChannelId("WB");
-  const destMap = await fetchDestinationsMap(channelId);
+const syncWbSupplyPlans = async (supabase: SupabaseClient, statusIds: number[]) => {
+  const channelId = await fetchChannelId(supabase, "WB");
+  const destMap = await fetchDestinationsMap(supabase, channelId);
 
   const formatDateMsk = (d: Date) =>
     new Intl.DateTimeFormat("en-CA", {
@@ -1316,7 +1335,7 @@ const syncWbSupplyPlans = async (statusIds: number[]) => {
   }
 
   const { byBarcode, itemById } = supplyItems.length
-    ? await fetchItemMap(Array.from(allBarcodes))
+    ? await fetchItemMap(supabase, Array.from(allBarcodes))
     : { byBarcode: new Map<string, { itemId: string }>(), itemById: new Map<string, any>() };
   const nowIso = new Date().toISOString();
   const supplyRows: any[] = [];
@@ -1337,7 +1356,7 @@ const syncWbSupplyPlans = async (statusIds: number[]) => {
     const whId = String(row.info?.warehouseID ?? row.info?.warehouseId ?? "").trim();
     const whName = String(row.info?.warehouseName ?? "").trim();
     const shipmentName = whName ? `${whName} • ${row.supplyId}` : row.supplyId;
-    const destinationId = await ensureDestination(channelId, destMap, whId, whName, "WB склад");
+    const destinationId = await ensureDestination(supabase, channelId, destMap, whId, whName, "WB склад");
     const statusId = Number(
       row.info?.statusID ??
         row.info?.statusId ??
@@ -1401,7 +1420,7 @@ const syncWbSupplyPlans = async (statusIds: number[]) => {
     for (const row of skuUpdates) {
       if (!dedup.has(row.id)) dedup.set(row.id, row.wb_sku);
     }
-    await updateWbSkus(Array.from(dedup, ([id, wb_sku]) => ({ id, wb_sku })));
+    await updateWbSkus(supabase, Array.from(dedup, ([id, wb_sku]) => ({ id, wb_sku })));
   }
 
   if (supplyRows.length) {
@@ -1434,7 +1453,7 @@ const syncWbSupplyPlans = async (statusIds: number[]) => {
       }
 
       if (shippedPlans.length) {
-        const warehouseId = await getDefaultPhysicalWarehouseId();
+        const warehouseId = await getDefaultPhysicalWarehouseId(supabase);
         if (warehouseId) {
           const planIds = shippedPlans.map((p) => p.id);
           const { data: existingMoves, error: moveErr } = await supabase
@@ -1519,7 +1538,7 @@ const syncWbSupplyPlans = async (statusIds: number[]) => {
     }
 
     if (shippedPlans.length) {
-      const warehouseId = await getDefaultPhysicalWarehouseId();
+      const warehouseId = await getDefaultPhysicalWarehouseId(supabase);
       if (warehouseId) {
         const planIds = shippedPlans.map((p) => p.id);
         const { data: existingMoves, error: moveErr } = await supabase
@@ -1660,6 +1679,28 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: baseHeaders });
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, { status: 405 });
 
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) {
+    return jsonResponse({ error: "Authorization required" }, { status: 401 });
+  }
+
+  const userClient = getUserClient(authHeader);
+  const { data: userData, error: userError } = await userClient.auth.getUser();
+  if (userError || !userData?.user) {
+    return jsonResponse({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { data: profile, error: profileError } = await userClient
+    .from("profiles")
+    .select("is_active")
+    .eq("id", userData.user.id)
+    .maybeSingle();
+  if (profileError || !profile?.is_active) {
+    return jsonResponse({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const supabase = getAdminClient() ?? userClient;
+
   let body: Record<string, unknown> = {};
   try {
     body = await req.json();
@@ -1672,7 +1713,7 @@ serve(async (req) => {
 
   try {
     if (channel === "OZON") {
-      const result = await syncOzonSupplyPlans();
+      const result = await syncOzonSupplyPlans(supabase);
       return jsonResponse({ channel, ...result });
     }
     if (channel === "WB") {
@@ -1691,7 +1732,7 @@ serve(async (req) => {
         );
         return jsonResponse({ channel, statuses: unique });
       }
-      const result = await syncWbSupplyPlans(statusIds.length ? statusIds : WB_STATUS_IDS_DEFAULT);
+      const result = await syncWbSupplyPlans(supabase, statusIds.length ? statusIds : WB_STATUS_IDS_DEFAULT);
       return jsonResponse({ channel, ...result });
     }
     return jsonResponse({ error: "channel must be OZON or WB" }, { status: 400 });
