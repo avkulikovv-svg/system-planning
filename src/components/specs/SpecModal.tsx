@@ -68,6 +68,22 @@ const normalizeLine = (ln: SpecLine): SpecLine => {
   const refId = ln.refId ?? ln.materialId ?? "";
   return { id: ln.id || uid(), kind, refId, qty: ln.qty || 0, uom: ln.uom || "" };
 };
+const mapRecordToSpec = (row: any): Spec => ({
+  id: row.id as string,
+  productId: row.linkedProductId ?? null,
+  productCode: (row.specCode ?? "").toString(),
+  productName: (row.specName ?? "").toString(),
+  effectiveFrom: row.effectiveFrom ?? null,
+  version: row.version ?? undefined,
+  updatedAt: row.updatedAt ?? new Date().toISOString(),
+  lines: (row.lines ?? []).map((ln: any) => ({
+    id: ln.id as string,
+    kind: (ln.kind as "mat" | "semi") ?? "mat",
+    refId: ln.refId as string,
+    qty: Number(ln.qty) || 0,
+    uom: ln.uom || "",
+  })),
+});
 
 /* ========= Источники ========= */
 const useMaterials = () => useLocalState<Material[]>("mrp.materials.v1", []);
@@ -290,9 +306,10 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
     let refreshed = false;
     try {
       const rows = await fetchSpecsFromSupabase();
-      setSpecs(rows);
+      const mapped = rows.map(mapRecordToSpec);
+      setSpecs(mapped);
       try {
-        localStorage.setItem("mrp.specs.v1", JSON.stringify(rows));
+        localStorage.setItem("mrp.specs.v1", JSON.stringify(mapped));
       } catch (err) {
         console.warn("SpecModal: failed to persist specs", err);
       }
