@@ -1583,12 +1583,52 @@ table :is(th, td):has(.act) .act + .act{ margin-left: 0; }
 .mp-wb{ color:#7c2d12; }
 .mp-ozon{ color:#0f62fe; }
 .mp-client{ color:#0f172a; }
-.mp-matrix__col{ text-align:center; font-weight:500; border-left:1px solid #e2e8f0; padding-top:22px; padding-bottom:22px; }
+.mp-matrix__col{
+  text-align:center;
+  font-weight:500;
+  border-left:1px solid #e2e8f0;
+  padding-top:16px;
+  padding-bottom:16px;
+}
 .mp-matrix__col{ white-space:normal; word-break:break-word; }
 .mp-matrix__col-title{ font-weight:600; color:#0f172a; }
 .mp-matrix__col small{ color:#64748b; display:block; margin-top:6px; }
 .mp-matrix__col div{ line-height:1.2; }
-.mp-matrix__col-actions{ margin-top:8px; display:flex; justify-content:center; }
+.mp-matrix__col-inner{
+  display:flex;
+  flex-direction:column;
+  min-height:170px;
+  height:100%;
+}
+.mp-matrix__col-actions{
+  margin-top:auto;
+  display:flex;
+  justify-content:center;
+  padding-top:8px;
+}
+.mp-matrix__col-actions .mrp-btn{
+  min-width:96px;
+  white-space:nowrap;
+  word-break:normal;
+  overflow-wrap:normal;
+  padding-left:8px;
+  padding-right:8px;
+  text-align:center;
+  display:inline-flex;
+  justify-content:center;
+  align-items:center;
+}
+.mp-matrix__col-actions .mrp-btn.mrp-btn--ghost{
+  border-color:#9aa7f5;
+  background:#eef2ff;
+  color:#3b3fe0;
+  box-shadow:0 4px 10px rgba(99,102,241,0.15);
+}
+.mp-matrix__col-actions .mrp-btn.mrp-btn--ghost:hover{
+  border-color:#7f8ff0;
+  background:#e0e7ff;
+  color:#2f35c7;
+}
 .mp-matrix__col-badge{
   margin-top:8px;
   font-size:11px;

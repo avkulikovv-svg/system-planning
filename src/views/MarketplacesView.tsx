@@ -2045,21 +2045,23 @@ export function MarketplacesView({ isAdmin, canWb, canOzon, canReports }: Market
                       key={col.id}
                       className={`mp-matrix__col${columnRiskById[col.id] ? ` mp-matrix__col--${columnRiskById[col.id]}` : ""}${col.warehouseShippedAt ? " mp-matrix__col--warehouse" : ""}`}
                     >
-                      <div className="mp-matrix__col-title">{col.title}</div>
-                      <small>{col.subtitle}</small>
-                      {col.warehouseShippedAt && (
-                        <div className="mp-matrix__col-badge">
-                          Уехала со склада · {formatDateTimeRu(col.warehouseShippedAt)}
+                      <div className="mp-matrix__col-inner">
+                        <div className="mp-matrix__col-title">{col.title}</div>
+                        <small>{col.subtitle}</small>
+                        {col.warehouseShippedAt && (
+                          <div className="mp-matrix__col-badge">
+                            Уехала со склада · {formatDateTimeRu(col.warehouseShippedAt)}
+                          </div>
+                        )}
+                        <div className="mp-matrix__col-actions">
+                          <button
+                            className={`mrp-btn mrp-btn--xs ${col.warehouseShippedAt ? "mrp-btn--ghost" : "mrp-btn--primary"}`}
+                            onClick={() => updateWarehouseShipment(col)}
+                            disabled={warehouseUpdating === col.id}
+                          >
+                            {col.warehouseShippedAt ? "Отменить отгрузку" : "Отгрузить"}
+                          </button>
                         </div>
-                      )}
-                      <div className="mp-matrix__col-actions">
-                        <button
-                          className={`mrp-btn mrp-btn--xs ${col.warehouseShippedAt ? "mrp-btn--ghost" : "mrp-btn--primary"}`}
-                          onClick={() => updateWarehouseShipment(col)}
-                          disabled={warehouseUpdating === col.id}
-                        >
-                          {col.warehouseShippedAt ? "Отменить отгрузку" : "Отгрузить"}
-                        </button>
                       </div>
                     </th>
                   ))
