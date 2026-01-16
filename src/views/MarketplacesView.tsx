@@ -13,7 +13,9 @@ import {
 
 const channelGroups = [
   { code: "WB", label: "Wildberries", accent: "wb" },
+  { code: "WB_FBS", label: "WB FBS", accent: "wb" },
   { code: "OZON", label: "Ozon", accent: "ozon" },
+  { code: "OZON_FBS", label: "Ozon FBS", accent: "ozon" },
   { code: "CLIENT", label: "Клиенты", accent: "client" },
 ] as const;
 
@@ -355,12 +357,32 @@ const subtractBusinessDays = (iso: string, days: number) => {
 
 type WbExportRow = { barcode: string; qty: number; expiry?: string };
 
-export function MarketplacesView() {
-  const [filters, setFilters] = React.useState<Record<ChannelCode, boolean>>({
-    WB: true,
-    OZON: true,
-    CLIENT: true,
-  });
+type MarketplacesViewProps = {
+  isAdmin: boolean;
+  canWb: boolean;
+  canOzon: boolean;
+  canReports: boolean;
+};
+
+export function MarketplacesView({ isAdmin, canWb, canOzon, canReports }: MarketplacesViewProps) {
+  const canSeeWb = isAdmin || canWb;
+  const canSeeOzon = isAdmin || canOzon;
+  const canSeeReports = isAdmin || canReports;
+
+  const allowedChannelCodes = React.useMemo(() => {
+    if (canSeeWb && canSeeOzon) return new Set<ChannelCode>(["WB", "WB_FBS", "OZON", "OZON_FBS", "CLIENT"]);
+    if (canSeeWb) return new Set<ChannelCode>(["WB", "WB_FBS"]);
+    if (canSeeOzon) return new Set<ChannelCode>(["OZON", "OZON_FBS"]);
+    return new Set<ChannelCode>();
+  }, [canSeeWb, canSeeOzon]);
+
+  const [filters, setFilters] = React.useState<Record<ChannelCode, boolean>>(() => ({
+    WB: allowedChannelCodes.has("WB"),
+    WB_FBS: allowedChannelCodes.has("WB_FBS"),
+    OZON: allowedChannelCodes.has("OZON"),
+    OZON_FBS: allowedChannelCodes.has("OZON_FBS"),
+    CLIENT: allowedChannelCodes.has("CLIENT"),
+  }));
   const [warehouseFilter, setWarehouseFilter] = React.useState<"all" | "not_shipped" | "shipped">("all");
   const [columns, setColumns] = React.useState<SupplyColumn[]>([]);
   const [items, setItems] = React.useState<MatrixItem[]>([]);
@@ -374,6 +396,8 @@ export function MarketplacesView() {
   const [loading, setLoading] = React.useState(false);
   const [syncing, setSyncing] = React.useState(false);
   const [syncingWb, setSyncingWb] = React.useState(false);
+  const [syncingWbFbs, setSyncingWbFbs] = React.useState(false);
+  const [syncingOzonFbs, setSyncingOzonFbs] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [lastUpdatedOzon, setLastUpdatedOzon] = React.useState<string | null>(null);
   const [wbExportOpen, setWbExportOpen] = React.useState(false);
@@ -392,6 +416,21 @@ export function MarketplacesView() {
   const [palletLimits, setPalletLimits] = React.useState<PalletLimits>(DEFAULT_PALLET_LIMITS);
   const [hasSupplyBoxType, setHasSupplyBoxType] = React.useState(true);
   const [warehouseUpdating, setWarehouseUpdating] = React.useState<string | null>(null);
+  const allowedChannelGroups = React.useMemo(
+    () => channelGroups.filter((ch) => allowedChannelCodes.has(ch.code)),
+    [allowedChannelCodes],
+  );
+
+  React.useEffect(() => {
+    setFilters((prev) => ({
+      ...prev,
+      WB: allowedChannelCodes.has("WB"),
+      WB_FBS: allowedChannelCodes.has("WB_FBS"),
+      OZON: allowedChannelCodes.has("OZON"),
+      OZON_FBS: allowedChannelCodes.has("OZON_FBS"),
+      CLIENT: allowedChannelCodes.has("CLIENT"),
+    }));
+  }, [allowedChannelCodes]);
 
   const loadData = React.useCallback(async (options?: { force?: boolean }) => {
     setError(null);
@@ -566,20 +605,25 @@ export function MarketplacesView() {
     }
   }, []);
 
+  const columnsVisible = React.useMemo(
+    () => columns.filter((col) => allowedChannelCodes.has(col.channel)),
+    [columns, allowedChannelCodes],
+  );
+
   const wbColumns = React.useMemo(
     () =>
-      columns.filter((col) => col.channel === "WB" && col.externalSupplyId).map((col) => ({
+      columnsVisible.filter((col) => col.channel === "WB" && col.externalSupplyId).map((col) => ({
         id: col.id,
         label: col.title,
         date: col.subtitle,
         externalSupplyId: col.externalSupplyId ?? "",
       })),
-    [columns],
+    [columnsVisible],
   );
 
   const palletColumns = React.useMemo(
-    () => columns.filter((col) => col.externalSupplyId),
-    [columns],
+    () => columnsVisible.filter((col) => col.externalSupplyId),
+    [columnsVisible],
   );
 
   const destinationById = React.useMemo(
@@ -1135,23 +1179,58 @@ export function MarketplacesView() {
     }
   }, []);
 
+  const syncWbFbs = React.useCallback(async () => {
+    setSyncingWbFbs(true);
+    try {
+      await syncMarketplaceSupplyPlans("WB_FBS");
+      return true;
+    } catch (err: any) {
+      console.error("sync marketplace plans", err);
+      setError(err?.message ?? "Не удалось обновить WB FBS");
+      return false;
+    } finally {
+      setSyncingWbFbs(false);
+    }
+  }, []);
+
+  const syncOzonFbs = React.useCallback(async () => {
+    setSyncingOzonFbs(true);
+    try {
+      await syncMarketplaceSupplyPlans("OZON_FBS");
+      return true;
+    } catch (err: any) {
+      console.error("sync marketplace plans", err);
+      setError(err?.message ?? "Не удалось обновить Ozon FBS");
+      return false;
+    } finally {
+      setSyncingOzonFbs(false);
+    }
+  }, []);
+
   React.useEffect(() => {
     loadData();
   }, [loadData]);
 
+  React.useEffect(() => {
+    if (!canSeeReports && viewMode === "history") {
+      setViewMode("active");
+    }
+  }, [canSeeReports, viewMode]);
+
   const toggleChannel = (code: ChannelCode) => {
+    if (!allowedChannelCodes.has(code)) return;
     setFilters((prev) => ({ ...prev, [code]: !prev[code] }));
   };
 
   const activeColumns = React.useMemo(
-    () => columns.filter((col) => !col.warehouseShippedAt),
-    [columns],
+    () => columnsVisible.filter((col) => !col.warehouseShippedAt),
+    [columnsVisible],
   );
   const filteredByWarehouse = React.useMemo(() => {
-    if (warehouseFilter === "all") return columns;
-    if (warehouseFilter === "shipped") return columns.filter((col) => col.warehouseShippedAt);
-    return columns.filter((col) => !col.warehouseShippedAt);
-  }, [columns, warehouseFilter]);
+    if (warehouseFilter === "all") return columnsVisible;
+    if (warehouseFilter === "shipped") return columnsVisible.filter((col) => col.warehouseShippedAt);
+    return columnsVisible.filter((col) => !col.warehouseShippedAt);
+  }, [columnsVisible, warehouseFilter]);
   const visibleColumns = filteredByWarehouse.filter((col) => filters[col.channel]);
   const activeColumnIds = React.useMemo(() => new Set(activeColumns.map((col) => col.id)), [activeColumns]);
   const reserveByItem = React.useMemo(() => {
@@ -1539,12 +1618,14 @@ export function MarketplacesView() {
           >
             Актуальные
           </button>
-          <button
-            className={`mrp-btn ${viewMode === "history" ? "mrp-btn--primary" : "mrp-btn--ghost"}`}
-            onClick={() => setViewMode("history")}
-          >
-            История отгрузок
-          </button>
+          {canSeeReports && (
+            <button
+              className={`mrp-btn ${viewMode === "history" ? "mrp-btn--primary" : "mrp-btn--ghost"}`}
+              onClick={() => setViewMode("history")}
+            >
+              История отгрузок
+            </button>
+          )}
         </div>
       </header>
 
@@ -1553,51 +1634,83 @@ export function MarketplacesView() {
           <div className="panel-header__title">Каналы</div>
           <div className="panel-actions">
             <div className="panel-actions__group">
-              <button
-                className="mrp-btn mrp-btn--primary"
-                onClick={async () => {
-                  const ok = await syncOzon();
-                  if (ok) await loadData({ force: true });
-                }}
-                disabled={syncing || loading}
-              >
-                {syncing ? "Обновление Ozon…" : "Обновить Ozon"}
-              </button>
-              <button
-                className="mrp-btn mrp-btn--primary"
-                onClick={async () => {
-                  const ok = await syncWb();
-                  if (ok) await loadData({ force: true });
-                }}
-                disabled={syncingWb || loading}
-              >
-                {syncingWb ? "Обновление WB…" : "Обновить WB"}
-              </button>
+              {canSeeOzon && (
+                <button
+                  className="mrp-btn mrp-btn--primary"
+                  onClick={async () => {
+                    const ok = await syncOzon();
+                    if (ok) await loadData({ force: true });
+                  }}
+                  disabled={syncing || loading}
+                >
+                  {syncing ? "Обновление Ozon…" : "Обновить Ozon"}
+                </button>
+              )}
+              {canSeeWb && (
+                <button
+                  className="mrp-btn mrp-btn--primary"
+                  onClick={async () => {
+                    const ok = await syncWb();
+                    if (ok) await loadData({ force: true });
+                  }}
+                  disabled={syncingWb || loading}
+                >
+                  {syncingWb ? "Обновление WB…" : "Обновить WB"}
+                </button>
+              )}
+              {canSeeWb && (
+                <button
+                  className="mrp-btn mrp-btn--primary"
+                  onClick={async () => {
+                    const ok = await syncWbFbs();
+                    if (ok) await loadData({ force: true });
+                  }}
+                  disabled={syncingWbFbs || loading}
+                >
+                  {syncingWbFbs ? "Обновление WB FBS…" : "Обновить WB FBS"}
+                </button>
+              )}
+              {canSeeOzon && (
+                <button
+                  className="mrp-btn mrp-btn--primary"
+                  onClick={async () => {
+                    const ok = await syncOzonFbs();
+                    if (ok) await loadData({ force: true });
+                  }}
+                  disabled={syncingOzonFbs || loading}
+                >
+                  {syncingOzonFbs ? "Обновление Ozon FBS…" : "Обновить Ozon FBS"}
+                </button>
+              )}
               <button className="mrp-btn mrp-btn--primary">+ Добавить колонку</button>
               <button className="mrp-btn mrp-btn--primary">Импорт из XLSX</button>
-              <button
-                className="mrp-btn mrp-btn--primary"
-                onClick={() => {
-                  setWbExportOpen(true);
-                  setWbExportSupply(wbColumns[0]?.id ?? "");
-                }}
-              >
-                WB XLSX
-              </button>
-              <button
-                className="mrp-btn mrp-btn--primary"
-                onClick={() => {
-                  setPalletOpen(true);
-                  setPalletSupply(palletColumns[0]?.id ?? "");
-                }}
-              >
-                Палеты
-              </button>
+              {canSeeWb && (
+                <button
+                  className="mrp-btn mrp-btn--primary"
+                  onClick={() => {
+                    setWbExportOpen(true);
+                    setWbExportSupply(wbColumns[0]?.id ?? "");
+                  }}
+                >
+                  WB XLSX
+                </button>
+              )}
+              {canSeeWb && (
+                <button
+                  className="mrp-btn mrp-btn--primary"
+                  onClick={() => {
+                    setPalletOpen(true);
+                    setPalletSupply(palletColumns[0]?.id ?? "");
+                  }}
+                >
+                  Палеты
+                </button>
+              )}
             </div>
           </div>
         </div>
         <div className="filter-row">
-          {channelGroups.map((opt) => (
+          {allowedChannelGroups.map((opt) => (
             <label key={opt.code} className="filter-check">
               <input
                 type="checkbox"
@@ -1629,7 +1742,7 @@ export function MarketplacesView() {
             </button>
           </div>
           <div className="text-xs text-slate-500 ml-auto">
-            {lastUpdatedOzon ? `Ozon обновлён: ${lastUpdatedOzon}` : "Ozon ещё не обновлялся"}
+            {canSeeOzon ? (lastUpdatedOzon ? `Ozon обновлён: ${lastUpdatedOzon}` : "Ozon ещё не обновлялся") : null}
           </div>
         </div>
       </section>

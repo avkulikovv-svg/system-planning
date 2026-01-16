@@ -578,6 +578,135 @@ input, select, textarea, button{ font: inherit; }
   width:max-content;
   max-width:100%;
 }
+.settings-wrap .settings-users-perms{
+  width:100%;
+}
+
+.permissions-grid-wrap{
+  min-width:880px;
+}
+.permissions-grid{
+  display:grid;
+  grid-template-columns:var(--perm-grid-cols);
+  gap:12px;
+  align-items:stretch;
+}
+.permissions-grid--header{
+  padding:8px 12px;
+}
+.permissions-label{
+  font-size:13px;
+  color:#64748b;
+  padding-top:6px;
+}
+.permissions-empty{
+  font-size:13px;
+  color:#94a3b8;
+  padding:6px 0;
+}
+.permissions-user-card{
+  border:1px solid #e2e8f0;
+  border-radius:16px;
+  background:#fff;
+  padding:12px;
+  box-shadow:0 6px 16px rgba(15,23,42,0.06);
+}
+.permissions-user-head{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.permissions-avatar{
+  width:36px;
+  height:36px;
+  border-radius:12px;
+  background:#f1f5f9;
+  color:#475569;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:12px;
+  font-weight:600;
+}
+.permissions-meta{
+  min-width:0;
+  flex:1;
+}
+.permissions-email{
+  font-size:13px;
+  color:#0f172a;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.permissions-last{
+  font-size:11px;
+  color:#94a3b8;
+}
+.permissions-dirty{
+  width:8px;
+  height:8px;
+  border-radius:999px;
+  background:#f59e0b;
+}
+.permissions-actions{
+  margin-top:10px;
+  display:flex;
+  gap:8px;
+  align-items:center;
+}
+.permissions-matrix{
+  margin-top:12px;
+  border:1px solid #e2e8f0;
+  border-radius:16px;
+  background:#fff;
+  overflow:hidden;
+}
+.permissions-group{
+  border-bottom:1px solid #eef2f7;
+}
+.permissions-group:last-child{
+  border-bottom:none;
+}
+.permissions-row{
+  display:grid;
+  grid-template-columns:var(--perm-grid-cols);
+  gap:12px;
+  align-items:center;
+  padding:8px 12px;
+}
+.permissions-row--group{
+  background:#f8fafc;
+}
+.permissions-group-title{
+  justify-content:flex-start;
+}
+.permissions-item{
+  font-size:13px;
+  color:#334155;
+}
+.permissions-cell-center{
+  display:flex;
+  align-items:center;
+  justify-content:flex-start;
+  gap:12px;
+}
+.permissions-cell-duo{
+  gap:12px;
+}
+.permissions-cell-single{
+  justify-content:flex-start;
+}
+.permissions-cell-center--center{
+  justify-content:center;
+}
+.permissions-check-label{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  font-size:11px;
+  color:#94a3b8;
+}
 
 /* ===================== PILLS (кнопки-навигации) ===================== */
 .app-pill{

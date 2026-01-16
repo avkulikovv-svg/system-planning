@@ -1,6 +1,6 @@
 import { supabase } from "./supabaseClient";
 
-export type MarketplaceSupplyChannel = "OZON" | "WB";
+export type MarketplaceSupplyChannel = "OZON" | "WB" | "WB_FBS" | "OZON_FBS";
 
 type SyncResponse = {
   channel?: MarketplaceSupplyChannel;

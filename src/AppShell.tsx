@@ -52,6 +52,8 @@ type Profile = {
   email: string | null;
   phone: string | null;
   is_active: boolean;
+  role?: string | null;
+  permissions?: string[] | null;
 };
 
 type Product = {
@@ -264,6 +266,36 @@ const DEFAULT_NAV: Section[] = [
     ],
   },
 ];
+
+const PERMISSION_BY_SUBKEY: Record<string, string> = {
+  plan: "mfg.plan",
+  prodReports: "mfg.prodReports",
+  specs: "mfg.specs",
+  writeoff: "mfg.writeoff",
+  forecast: "sales.forecast",
+  prices: "sales.prices",
+  wbwh: "sales.wbwh",
+  products: "purchase.products",
+  materials: "purchase.materials",
+  semis: "purchase.semis",
+  vendors: "purchase.vendors",
+  po: "purchase.po",
+  receipts: "purchase.receipts",
+  balances: "stock.balances",
+  moves: "stock.moves",
+  count: "stock.count",
+  dashboard: "reports.dashboard",
+  kpi: "reports.kpi",
+  uom: "settings.uom",
+  curr: "settings.curr",
+  cats: "settings.cats",
+  groups: "settings.groups",
+  wh: "settings.wh",
+  mpwh: "settings.mpwh",
+  users: "settings.users",
+  integr: "settings.integrations",
+  nums: "settings.nums",
+};
 
 
 /* ------------ Helpers ------------ */
@@ -2496,6 +2528,32 @@ export default function AppShell() {
   }, [activeSectionKey]); // eslint-disable-line
 
   const userLabel = profile?.email ?? session?.user?.email ?? "";
+  const permissions = useMemo(() => new Set((profile?.permissions ?? []).filter(Boolean)), [profile?.permissions]);
+  const isAdmin = profile?.role === "admin";
+  const hasPermission = useCallback(
+    (perm: string) =>
+      isAdmin ||
+      permissions.has(perm) ||
+      permissions.has(`${perm}.read`) ||
+      permissions.has(`${perm}.write`),
+    [isAdmin, permissions],
+  );
+
+  const canAccessMarketplaces = useMemo(
+    () =>
+      hasPermission("sales.marketplaces.wb") ||
+      hasPermission("sales.marketplaces.ozon") ||
+      hasPermission("sales.marketplaces.reports"),
+    [hasPermission],
+  );
+  const canAccessWb = useMemo(
+    () => hasPermission("sales.marketplaces.wb"),
+    [hasPermission],
+  );
+  const canAccessOzon = useMemo(
+    () => hasPermission("sales.marketplaces.ozon"),
+    [hasPermission],
+  );
   const userInitials = useMemo(() => {
     const raw = (userLabel ?? "").trim();
     if (!raw) return "U";
@@ -2535,7 +2593,7 @@ export default function AppShell() {
       try {
         const { data, error } = await supabase
           .from("profiles")
-          .select("id,email,phone,is_active")
+          .select("id,email,phone,is_active,role,permissions")
           .eq("id", session.user.id)
           .maybeSingle();
         if (error) throw error;
@@ -2548,7 +2606,7 @@ export default function AppShell() {
               phone: session.user.phone,
               is_active: true,
             })
-            .select("id,email,phone,is_active")
+            .select("id,email,phone,is_active,role,permissions")
             .single();
           if (insertError) throw insertError;
           if (!cancelled) setProfile(inserted);
@@ -2566,6 +2624,24 @@ export default function AppShell() {
       cancelled = true;
     };
   }, [session?.user?.id]);
+
+  useEffect(() => {
+    if (!profile) return;
+    const canSee = (subKey: string) => {
+      if (isAdmin) return true;
+      if (subKey === "mp") return canAccessMarketplaces;
+      if (subKey === "wbwh") return canAccessWb;
+      const perm = PERMISSION_BY_SUBKEY[subKey];
+      return perm ? hasPermission(perm) : true;
+    };
+    const next = DEFAULT_NAV
+      .map((section) => ({
+        ...section,
+        subs: (section.subs ?? []).filter((sub) => canSee(sub.key)),
+      }))
+      .filter((section) => (section.subs ?? []).length > 0);
+    setNav(next.length ? next : DEFAULT_NAV);
+  }, [profile, isAdmin, canAccessMarketplaces, canAccessWb, hasPermission, setNav]);
 
   const submitAuth = async () => {
     const email = authEmail.trim();
@@ -2838,7 +2914,12 @@ export default function AppShell() {
               <SettingsGroups />
             </div>
           ) : currentSection?.key === "sales" && activeSubKey === "mp" ? (
-            <MarketplacesView />
+            <MarketplacesView
+              isAdmin={isAdmin}
+              canWb={hasPermission("sales.marketplaces.wb")}
+              canOzon={hasPermission("sales.marketplaces.ozon")}
+              canReports={hasPermission("sales.marketplaces.reports")}
+            />
           ) : currentSection?.key === "sales" && activeSubKey === "wbwh" ? (
             <WbWarehousesView />
           ) : currentSection?.key === "settings" && activeSubKey === "wh" ? (
@@ -2850,7 +2931,7 @@ export default function AppShell() {
               <SettingsMarketplaceWarehouses />
             </div>
           ) : currentSection?.key === "settings" && activeSubKey === "users" ? (
-            <SettingsUsers />
+            <SettingsUsers isAdmin={isAdmin} />
           ) : currentSection?.key === "settings" && activeSubKey === "integr" ? (
             <div className="settings-wrap">
               <SettingsIntegrations />
@@ -3501,7 +3582,7 @@ function SettingsWarehouses() {
   );
 }
 
-function SettingsUsers() {
+function SettingsUsers({ isAdmin }: { isAdmin: boolean }) {
   type TgUser = {
     id: string;
     tg_user_id: number | null;
@@ -3514,12 +3595,146 @@ function SettingsUsers() {
   };
 
   const [users, setUsers] = useState<TgUser[]>([]);
+  const [appUsers, setAppUsers] = useState<Array<Profile & { last_sign_in_at?: string | null }>>([]);
+  const [permDirty, setPermDirty] = useState<Record<string, boolean>>({});
+  const [permQuery, setPermQuery] = useState("");
+  const [permRoleFilter, setPermRoleFilter] = useState<
+    "all" | "admin" | "marketplace_wb" | "marketplace_ozon" | "purchasing" | "sales" | "dealer"
+  >("all");
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [bindings, setBindings] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(false);
   const [newUsername, setNewUsername] = useState("");
   const [newRole, setNewRole] = useState<"executor" | "controller">("controller");
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
   const { warehouses, physical, virtual } = useSupabaseWarehouses();
+  type RoleKey = "admin" | "marketplace_wb" | "marketplace_ozon" | "purchasing" | "sales" | "dealer";
+  type PermissionItem = { key: string; label: string; readKey: string; writeKey?: string | null };
+  type PermissionGroup = { key: string; title: string; items: PermissionItem[] };
+
+  const ROLE_LABELS: Record<RoleKey, string> = {
+    admin: "Админ",
+    marketplace_wb: "Маркетплейс WB",
+    marketplace_ozon: "Маркетплейс Ozon",
+    purchasing: "Закупки",
+    sales: "Продажи",
+    dealer: "Дилер",
+  };
+
+  const ROLE_PRESETS: Record<RoleKey, string[]> = {
+    admin: [],
+    marketplace_wb: [
+      "sales.marketplaces.wb.read",
+      "sales.marketplaces.wb.write",
+      "sales.marketplaces.reports.read",
+    ],
+    marketplace_ozon: [
+      "sales.marketplaces.ozon.read",
+      "sales.marketplaces.ozon.write",
+      "sales.marketplaces.reports.read",
+    ],
+    purchasing: [
+      "purchase.products.read",
+      "purchase.products.write",
+      "purchase.materials.read",
+      "purchase.materials.write",
+      "purchase.semis.read",
+      "purchase.semis.write",
+      "purchase.vendors.read",
+      "purchase.vendors.write",
+      "purchase.po.read",
+      "purchase.po.write",
+      "purchase.receipts.read",
+      "purchase.receipts.write",
+      "stock.balances.read",
+    ],
+    sales: [
+      "sales.forecast.read",
+      "sales.prices.read",
+      "sales.marketplaces.wb.read",
+      "sales.marketplaces.ozon.read",
+      "sales.marketplaces.reports.read",
+      "sales.wbwh.read",
+    ],
+    dealer: [
+      "reports.dashboard.read",
+      "stock.balances.read",
+      "sales.forecast.read",
+      "sales.prices.read",
+    ],
+  };
+
+  const permissionsCatalog = useMemo<PermissionGroup[]>(
+    () => [
+      {
+        key: "sales",
+        title: "Продажи",
+        items: [
+          { key: "sales.forecast", label: "Прогноз", readKey: "sales.forecast.read", writeKey: "sales.forecast.write" },
+          { key: "sales.prices", label: "Цены/Прайсы", readKey: "sales.prices.read", writeKey: "sales.prices.write" },
+          { key: "sales.marketplaces.wb", label: "Маркетплейсы • WB", readKey: "sales.marketplaces.wb.read", writeKey: "sales.marketplaces.wb.write" },
+          { key: "sales.marketplaces.ozon", label: "Маркетплейсы • Ozon", readKey: "sales.marketplaces.ozon.read", writeKey: "sales.marketplaces.ozon.write" },
+          { key: "sales.marketplaces.reports", label: "Маркетплейс‑отчёты", readKey: "sales.marketplaces.reports.read" },
+          { key: "sales.wbwh", label: "Склады WB", readKey: "sales.wbwh.read", writeKey: "sales.wbwh.write" },
+        ],
+      },
+      {
+        key: "purchase",
+        title: "Закупки",
+        items: [
+          { key: "purchase.products", label: "Товары", readKey: "purchase.products.read", writeKey: "purchase.products.write" },
+          { key: "purchase.materials", label: "Материалы", readKey: "purchase.materials.read", writeKey: "purchase.materials.write" },
+          { key: "purchase.semis", label: "Полуфабрикаты", readKey: "purchase.semis.read", writeKey: "purchase.semis.write" },
+          { key: "purchase.vendors", label: "Поставщики", readKey: "purchase.vendors.read", writeKey: "purchase.vendors.write" },
+          { key: "purchase.po", label: "Заказы поставщикам", readKey: "purchase.po.read", writeKey: "purchase.po.write" },
+          { key: "purchase.receipts", label: "Поступления", readKey: "purchase.receipts.read", writeKey: "purchase.receipts.write" },
+        ],
+      },
+      {
+        key: "mfg",
+        title: "Производство",
+        items: [
+          { key: "mfg.plan", label: "План партии", readKey: "mfg.plan.read", writeKey: "mfg.plan.write" },
+          { key: "mfg.prodReports", label: "Отчёты о производстве", readKey: "mfg.prodReports.read", writeKey: "mfg.prodReports.write" },
+          { key: "mfg.specs", label: "Спецификации", readKey: "mfg.specs.read", writeKey: "mfg.specs.write" },
+          { key: "mfg.writeoff", label: "Списания", readKey: "mfg.writeoff.read", writeKey: "mfg.writeoff.write" },
+        ],
+      },
+      {
+        key: "stock",
+        title: "Склад",
+        items: [
+          { key: "stock.balances", label: "Остатки", readKey: "stock.balances.read" },
+          { key: "stock.moves", label: "Перемещения", readKey: "stock.moves.read", writeKey: "stock.moves.write" },
+          { key: "stock.count", label: "Инвентаризация", readKey: "stock.count.read", writeKey: "stock.count.write" },
+        ],
+      },
+      {
+        key: "reports",
+        title: "Отчёты",
+        items: [
+          { key: "reports.dashboard", label: "Дашборд", readKey: "reports.dashboard.read" },
+          { key: "reports.kpi", label: "KPI", readKey: "reports.kpi.read" },
+        ],
+      },
+      {
+        key: "settings",
+        title: "Настройки",
+        items: [
+          { key: "settings.uom", label: "Единицы", readKey: "settings.uom.read", writeKey: "settings.uom.write" },
+          { key: "settings.curr", label: "Валюты", readKey: "settings.curr.read", writeKey: "settings.curr.write" },
+          { key: "settings.cats", label: "Категории", readKey: "settings.cats.read", writeKey: "settings.cats.write" },
+          { key: "settings.groups", label: "Группы", readKey: "settings.groups.read", writeKey: "settings.groups.write" },
+          { key: "settings.wh", label: "Склады", readKey: "settings.wh.read", writeKey: "settings.wh.write" },
+          { key: "settings.mpwh", label: "МП склады", readKey: "settings.mpwh.read", writeKey: "settings.mpwh.write" },
+          { key: "settings.users", label: "Пользователи/Роли", readKey: "settings.users.read", writeKey: "settings.users.write" },
+          { key: "settings.integrations", label: "Интеграции", readKey: "settings.integrations.read", writeKey: "settings.integrations.write" },
+          { key: "settings.nums", label: "Нумераторы", readKey: "settings.nums.read", writeKey: "settings.nums.write" },
+        ],
+      },
+    ],
+    [],
+  );
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -3530,6 +3745,33 @@ function SettingsUsers() {
         .order("created_at", { ascending: false });
       if (error) throw error;
       setUsers((data || []) as TgUser[]);
+      if (isAdmin) {
+        const { data: authUsers, error: authErr } = await supabase.rpc("list_auth_users");
+        if (authErr) throw authErr;
+        const authList = (authUsers || []) as Array<{ id: string; email: string | null; phone: string | null; last_sign_in_at?: string | null }>;
+        const ids = authList.map((u) => u.id);
+        const { data: profiles, error: profErr } = await supabase
+          .from("profiles")
+          .select("id,email,phone,is_active,role,permissions")
+          .in("id", ids);
+        if (profErr) throw profErr;
+        const profileMap = new Map((profiles || []).map((p: any) => [p.id, p]));
+        const merged = authList.map((u) => {
+          const p = profileMap.get(u.id);
+          return {
+            id: u.id,
+            email: u.email ?? p?.email ?? null,
+            phone: u.phone ?? p?.phone ?? null,
+            is_active: p?.is_active ?? true,
+            role: p?.role ?? "dealer",
+            permissions: p?.permissions ?? [],
+            last_sign_in_at: u.last_sign_in_at ?? null,
+          } as Profile & { last_sign_in_at?: string | null };
+        });
+        setAppUsers(merged);
+      } else {
+        setAppUsers([]);
+      }
       const { data: linkRows, error: linkErr } = await supabase
         .from("tg_user_warehouses")
         .select("tg_user_id, warehouse_id, is_active");
@@ -3546,7 +3788,7 @@ function SettingsUsers() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isAdmin]);
 
   useEffect(() => {
     refresh();
@@ -3643,6 +3885,100 @@ function SettingsUsers() {
       alert("Не удалось обновить привязку склада");
     }
   };
+
+  const updateUserPermissions = (userId: string, updater: (current: Set<string>) => void) => {
+    setAppUsers((prev) =>
+      prev.map((u) => {
+        if (u.id !== userId) return u;
+        const current = new Set(u.permissions ?? []);
+        updater(current);
+        return { ...u, permissions: Array.from(current) };
+      }),
+    );
+    setPermDirty((prev) => ({ ...prev, [userId]: true }));
+  };
+
+  const toggleRead = (userId: string, readKey: string, writeKey: string | null | undefined, checked: boolean) => {
+    updateUserPermissions(userId, (current) => {
+      if (checked) {
+        current.add(readKey);
+      } else {
+        current.delete(readKey);
+        if (writeKey) current.delete(writeKey);
+      }
+    });
+  };
+
+  const toggleWrite = (userId: string, readKey: string, writeKey: string, checked: boolean) => {
+    updateUserPermissions(userId, (current) => {
+      if (checked) {
+        current.add(readKey);
+        current.add(writeKey);
+      } else {
+        current.delete(writeKey);
+      }
+    });
+  };
+
+  const toggleGroup = (userId: string, perms: string[], checked: boolean) => {
+    updateUserPermissions(userId, (current) => {
+      perms.forEach((p) => {
+        if (checked) current.add(p);
+        else current.delete(p);
+      });
+    });
+  };
+
+  const isGroupChecked = (permissions: Set<string>, perms: string[]) =>
+    perms.length > 0 && perms.every((p) => permissions.has(p));
+
+  const toggleGroupRow = (groupKey: string) => {
+    setExpandedGroups((prev) => ({ ...prev, [groupKey]: !(prev[groupKey] ?? true) }));
+  };
+
+  const savePermissions = async (userId: string, permissions: string[], role?: string | null) => {
+    try {
+      const { error } = await supabase
+        .from("profiles")
+        .update({ permissions, role: role ?? "dealer" })
+        .eq("id", userId);
+      if (error) throw error;
+      setPermDirty((prev) => ({ ...prev, [userId]: false }));
+    } catch (error) {
+      console.error("SettingsUsers: update permissions", error);
+      alert("Не удалось сохранить права");
+    }
+  };
+
+  const stageRoleChange = (userId: string, role: string) => {
+    const nextRole = role as RoleKey;
+    const preset = ROLE_PRESETS[nextRole] ?? [];
+    setAppUsers((prev) =>
+      prev.map((u) =>
+        u.id === userId ? { ...u, role: nextRole, permissions: preset } : u,
+      ),
+    );
+    setPermDirty((prev) => ({ ...prev, [userId]: true }));
+  };
+
+  const filteredAppUsers = useMemo(() => {
+    const q = permQuery.trim().toLowerCase();
+    return appUsers.filter((u) => {
+      if (permRoleFilter !== "all" && (u.role ?? "dealer") !== permRoleFilter) return false;
+      if (!q) return true;
+      const target = `${u.email ?? ""}`.toLowerCase();
+      return target.includes(q);
+    });
+  }, [appUsers, permQuery, permRoleFilter]);
+
+  const permissionsGridTemplate = useMemo(() => {
+    const cols = Math.max(filteredAppUsers.length, 1);
+    return `minmax(240px, 1.1fr) repeat(${cols}, minmax(220px, 1fr))`;
+  }, [filteredAppUsers.length]);
+  const permissionsGridStyle = useMemo(
+    () => ({ ["--perm-grid-cols" as any]: permissionsGridTemplate } as React.CSSProperties),
+    [permissionsGridTemplate],
+  );
 
   const warehouseLabel = (warehouseId: string) => {
     const wh = warehouses.find((w) => w.id === warehouseId);
@@ -3797,6 +4133,160 @@ function SettingsUsers() {
           </table>
         </div>
       </div>
+
+      {isAdmin && (
+        <div className="mrp-card mrp-card--compact mt-6 settings-users-perms">
+          <div className="mrp-toolbar mrp-toolbar--compact mb-2">
+            <div className="mrp-toolbar__left">
+              <div className="mrp-toolbar__title">Права доступа</div>
+            </div>
+            <div className="mrp-toolbar__right flex flex-wrap gap-2">
+              <select
+                className="mrp-select"
+                value={permRoleFilter}
+                onChange={(e) => setPermRoleFilter(e.target.value as any)}
+              >
+                <option value="all">Все сотрудники</option>
+                <option value="admin">Админы</option>
+                <option value="marketplace_wb">Маркетплейс WB</option>
+                <option value="marketplace_ozon">Маркетплейс Ozon</option>
+                <option value="purchasing">Закупки</option>
+                <option value="sales">Продажи</option>
+                <option value="dealer">Дилеры</option>
+              </select>
+              <input
+                className="mrp-input"
+                placeholder="Поиск по email"
+                value={permQuery}
+                onChange={(e) => setPermQuery(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="mrp-hscroll">
+            <div className="permissions-grid-wrap" style={permissionsGridStyle}>
+              <div className="permissions-grid permissions-grid--header">
+                <div className="permissions-label">Роли</div>
+                {filteredAppUsers.length > 0 ? (
+                  filteredAppUsers.map((u) => (
+                    <div key={u.id} className="permissions-user-card">
+                      <div className="permissions-user-head">
+                        <div className="permissions-avatar">
+                          {(u.email ?? "U").slice(0, 2).toUpperCase()}
+                        </div>
+                        <div className="permissions-meta">
+                          <div className="permissions-email">{u.email ?? "—"}</div>
+                          <div className="permissions-last">
+                            {u.last_sign_in_at ? new Date(u.last_sign_in_at).toLocaleString("ru-RU") : "—"}
+                          </div>
+                        </div>
+                        {permDirty[u.id] && <div className="permissions-dirty" title="Есть изменения" />}
+                      </div>
+                      <div className="permissions-actions">
+                        <select
+                          className="mrp-select mrp-select--sm"
+                          value={u.role ?? "dealer"}
+                          onChange={(e) => stageRoleChange(u.id, e.target.value)}
+                        >
+                          {Object.entries(ROLE_LABELS).map(([key, label]) => (
+                            <option key={key} value={key}>
+                              {label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          className="mrp-btn mrp-btn--primary mrp-btn--xs"
+                          disabled={!permDirty[u.id]}
+                          onClick={() => savePermissions(u.id, u.permissions ?? [], u.role)}
+                        >
+                          Сохранить
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="permissions-empty">Пользователей нет</div>
+                )}
+              </div>
+
+              <div className="permissions-matrix">
+                {permissionsCatalog.map((group) => {
+                  const groupKeys = group.items.flatMap((i) =>
+                    i.writeKey ? [i.readKey, i.writeKey] : [i.readKey],
+                  );
+                  const expanded = expandedGroups[group.key] ?? true;
+                  return (
+                    <div key={group.key} className="permissions-group">
+                      <div className="permissions-row permissions-row--group">
+                        <button
+                          className="mrp-btn mrp-btn--ghost mrp-btn--xs permissions-group-title"
+                          onClick={() => toggleGroupRow(group.key)}
+                        >
+                          {expanded ? "▾" : "▸"} {group.title}
+                        </button>
+                        {filteredAppUsers.map((u) => {
+                          const current = new Set(u.permissions ?? []);
+                          const checked = isGroupChecked(current, groupKeys);
+                          return (
+                            <div key={u.id} className="permissions-cell-center permissions-cell-center--center">
+                              <label className="permissions-check-label">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) => toggleGroup(u.id, groupKeys, e.target.checked)}
+                                />
+                                Все
+                              </label>
+                            </div>
+                          );
+                        })}
+                        {filteredAppUsers.length === 0 && <div />}
+                      </div>
+                      {expanded &&
+                        group.items.map((item) => (
+                          <div key={item.key} className="permissions-row">
+                            <div className="permissions-item">{item.label}</div>
+                            {filteredAppUsers.map((u) => {
+                              const current = new Set(u.permissions ?? []);
+                              const hasRead = current.has(item.readKey);
+                              const hasWrite = item.writeKey ? current.has(item.writeKey) : false;
+                              return (
+                                <div
+                                  key={u.id}
+                                  className={`permissions-cell-center ${item.writeKey ? "permissions-cell-duo" : "permissions-cell-single"}`}
+                                >
+                                  <label className="permissions-check-label">
+                                    <input
+                                      type="checkbox"
+                                      checked={hasRead}
+                                      onChange={(e) => toggleRead(u.id, item.readKey, item.writeKey, e.target.checked)}
+                                    />
+                                    Чт
+                                  </label>
+                                  {item.writeKey && (
+                                    <label className="permissions-check-label">
+                                      <input
+                                        type="checkbox"
+                                        checked={hasWrite}
+                                        onChange={(e) => toggleWrite(u.id, item.readKey, item.writeKey, e.target.checked)}
+                                      />
+                                      Зап
+                                    </label>
+                                  )}
+                                </div>
+                              );
+                            })}
+                            {filteredAppUsers.length === 0 && <div />}
+                          </div>
+                        ))}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

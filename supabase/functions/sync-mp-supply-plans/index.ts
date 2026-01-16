@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.213.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.2";
 
-type ChannelCode = "OZON" | "WB";
+type ChannelCode = "OZON" | "WB" | "WB_FBS" | "OZON_FBS";
 
 type SupplyOrder = {
   supply_order_id: string;
@@ -53,7 +53,20 @@ const WB_STATUS_IDS_DEFAULT = [1, 2, 3, 4, 5, 6];
 const WB_SHIPPED_STATUS_IDS = new Set([4, 5, 6]);
 const WB_SUPPLY_SYNC_DAYS = Number(Deno.env.get("WB_SUPPLY_SYNC_DAYS") ?? "30");
 const WB_SUPPLY_SYNC_LOOKAHEAD_DAYS = Number(Deno.env.get("WB_SUPPLY_SYNC_LOOKAHEAD_DAYS") ?? "30");
+const WB_FBS_SYNC_DAYS = Number(Deno.env.get("WB_FBS_SYNC_DAYS") ?? "30");
+const OZON_FBS_SYNC_DAYS = Number(Deno.env.get("OZON_FBS_SYNC_DAYS") ?? "30");
 const WB_TIMEZONE = "Europe/Moscow";
+const WB_FBS_ACTIVE_STATUSES = new Set(["waiting"]);
+const WB_FBS_CANCELED_STATUSES = new Set(["canceled", "declined_by_client", "canceled_by_client", "defect"]);
+const OZON_FBS_ACTIVE_STATUSES = new Set([
+  "awaiting_registration",
+  "acceptance_in_progress",
+  "awaiting_approve",
+  "awaiting_packaging",
+  "awaiting_deliver",
+  "awaiting_verification",
+]);
+const OZON_FBS_CANCELED_STATUSES = new Set(["cancelled", "cancelled_from_split_pending", "not_accepted"]);
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -62,6 +75,7 @@ const OZON_CLIENT_ID = Deno.env.get("OZON_CLIENT_ID");
 const OZON_API_KEY = Deno.env.get("OZON_API_KEY");
 const WB_API_TOKEN = Deno.env.get("WB_API_TOKEN");
 const WB_CONTENT_TOKEN = Deno.env.get("WB_CONTENT_TOKEN");
+const SYNC_MP_CRON_SECRET = Deno.env.get("SYNC_MP_CRON_SECRET");
 
 if (!SUPABASE_URL) {
   throw new Error("SUPABASE_URL must be set");
@@ -89,6 +103,7 @@ const getUserClient = (authHeader: string): SupabaseClient => {
 
 const OZON_BASE = "https://api-seller.ozon.ru";
 const WB_BASE = "https://supplies-api.wildberries.ru";
+const WB_FBS_BASE = "https://marketplace-api.wildberries.ru";
 
 const logStep = (step: string, meta?: Record<string, unknown>) => {
   if (meta) {
@@ -165,6 +180,7 @@ const pickBarcode = (it: Record<string, unknown>) => {
     it.barcode_seller,
     it.barcode_supplier,
     Array.isArray(it.barcodes) ? it.barcodes[0] : null,
+    Array.isArray((it as any).skus) ? (it as any).skus[0] : null,
     it.sku_barcode,
     it.offer_barcode,
     it.ean,
@@ -279,6 +295,44 @@ const wbRequest = async (path: string, opts?: { method?: string; body?: Record<s
   }
 
   throw new Error("wbRequest: исчерпаны попытки");
+};
+
+const wbFbsRequest = async (path: string, opts?: { method?: string; body?: Record<string, unknown> }) => {
+  const token = (WB_API_TOKEN || WB_CONTENT_TOKEN || "").replace(/[^\x21-\x7E]/g, "").trim();
+  if (!token) throw new Error("WB_API_TOKEN/WB_CONTENT_TOKEN не задан");
+
+  const url = `${WB_FBS_BASE}${path}`;
+  const method = opts?.method ?? "GET";
+  const payload = opts?.body ? JSON.stringify(opts.body) : undefined;
+
+  let delay = 800;
+  for (let attempt = 0; attempt < 7; attempt += 1) {
+    const startedAt = Date.now();
+    const res = await fetch(url, {
+      method,
+      headers: {
+        Authorization: token,
+        "Content-Type": "application/json",
+      },
+      body: payload,
+    });
+
+    const durationMs = Date.now() - startedAt;
+    logStep("wbFbsRequest", { path, status: res.status, durationMs, attempt });
+
+    if (res.ok) return res.json();
+
+    const text = await res.text();
+    if (res.status === 429 || res.status >= 500) {
+      await new Promise((r) => setTimeout(r, delay));
+      delay = Math.min(delay * 2, 8000);
+      continue;
+    }
+
+    throw new Error(`[${path}] WB ${res.status}: ${text || res.statusText}`);
+  }
+
+  throw new Error("wbFbsRequest: исчерпаны попытки");
 };
 
 const listFboSupplyOrderIds = async () => {
@@ -639,6 +693,45 @@ const updateWbSkus = async (supabase: SupabaseClient, updates: Array<{ id: strin
     updated += 1;
   }
   return { updated };
+};
+
+const fetchItemMapByOffers = async (supabase: SupabaseClient, offers: string[]) => {
+  const normalized = Array.from(new Set(offers.map((s) => s.trim()).filter(Boolean)));
+  const byOffer = new Map<string, { itemId: string }>();
+
+  if (!normalized.length) return { byOffer };
+
+  const normalizeKey = (s: string) => s.trim().toUpperCase();
+  for (const slice of chunk(normalized, 200)) {
+    const { data, error } = await supabase
+      .from("items")
+      .select("id, code, ozon_sku")
+      .in("code", slice);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      const code = String((row as any).code ?? "").trim();
+      if (!code) continue;
+      byOffer.set(normalizeKey(code), { itemId: row.id });
+    }
+  }
+
+  for (const slice of chunk(normalized, 200)) {
+    const { data, error } = await supabase
+      .from("items")
+      .select("id, code, ozon_sku")
+      .in("ozon_sku", slice);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      const sku = String((row as any).ozon_sku ?? "").trim();
+      if (!sku) continue;
+      const key = normalizeKey(sku);
+      if (!byOffer.has(key)) {
+        byOffer.set(key, { itemId: row.id });
+      }
+    }
+  }
+
+  return { byOffer };
 };
 
 const syncOzonSupplyPlans = async (supabase: SupabaseClient) => {
@@ -1242,6 +1335,796 @@ const getWbSupplyGoods = async (supplyId: string) => {
   return Array.isArray(goods) ? goods : [];
 };
 
+const listWbFbsOrders = async (fromTs: number, toTs: number) => {
+  const orders: any[] = [];
+  const LIMIT = 1000;
+  let next = 0;
+
+  for (let guard = 0; guard < 200; guard += 1) {
+    const url = `/api/v3/orders?dateFrom=${fromTs}&dateTo=${toTs}&limit=${LIMIT}&next=${next}`;
+    const r = await wbFbsRequest(url, { method: "GET" });
+    const page = Array.isArray(r?.orders) ? r.orders : [];
+    orders.push(...page);
+
+    const nxt = r?.next;
+    if (nxt == null) break;
+    next = Number(nxt);
+    if (!Number.isFinite(next) || next <= 0) break;
+  }
+
+  return orders;
+};
+
+const fetchWbFbsStatuses = async (orderIds: number[]) => {
+  const map = new Map<string, { wbStatus?: string | null; supplierStatus?: string | null }>();
+  for (const slice of chunk(orderIds, 100)) {
+    const r = await wbFbsRequest("/api/v3/orders/status", { method: "POST", body: { orders: slice } });
+    const statuses = Array.isArray(r?.orders) ? r.orders : [];
+    for (const row of statuses) {
+      const id = Number(row?.id);
+      if (!Number.isFinite(id)) continue;
+      map.set(String(id), {
+        wbStatus: row?.wbStatus ?? null,
+        supplierStatus: row?.supplierStatus ?? null,
+      });
+    }
+  }
+  return map;
+};
+
+const pickFbsStatusGroup = (wbStatus?: string | null) => {
+  const norm = String(wbStatus ?? "").trim();
+  if (WB_FBS_ACTIVE_STATUSES.has(norm)) return "active";
+  if (WB_FBS_CANCELED_STATUSES.has(norm)) return "canceled";
+  if (!norm) return "active";
+  return "shipped";
+};
+
+const parseWbFbsOrderId = (raw: unknown) => {
+  const num = Number(raw);
+  if (Number.isFinite(num)) return String(num);
+  const s = String(raw ?? "").trim();
+  return s ? s : null;
+};
+
+const pickOzonFbsStatusGroup = (status?: string | null) => {
+  const norm = String(status ?? "").trim();
+  if (OZON_FBS_ACTIVE_STATUSES.has(norm)) return "active";
+  if (OZON_FBS_CANCELED_STATUSES.has(norm)) return "canceled";
+  if (!norm) return "active";
+  return "shipped";
+};
+
+const formatOzonIso = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
+
+const listOzonFbsPostings = async (fromIso: string, toIso: string) => {
+  const postings: any[] = [];
+  const LIMIT = 1000;
+  let offset = 0;
+
+  for (let guard = 0; guard < 300; guard += 1) {
+    const baseBody = {
+      dir: "asc",
+      limit: LIMIT,
+      offset,
+      with: {
+        analytics_data: true,
+        barcodes: true,
+        financial_data: false,
+        legal_info: false,
+        translit: true,
+      },
+    };
+
+    const bodies = [
+      {
+        ...baseBody,
+        filter: {
+          processed_at_from: fromIso,
+          processed_at_to: toIso,
+        },
+      },
+      {
+        ...baseBody,
+        filter: {
+          cutoff_from: fromIso,
+          cutoff_to: toIso,
+        },
+      },
+      {
+        ...baseBody,
+        filter: {
+          since: fromIso,
+          to: toIso,
+        },
+      },
+    ];
+
+    let r: any = null;
+    let lastError: Error | null = null;
+    for (const body of bodies) {
+      logStep("ozon fbs list request", { offset, fromIso, toIso, body: JSON.stringify(body) });
+      try {
+        r = await ozonRequest("/v3/posting/fbs/list", body);
+        lastError = null;
+        break;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        lastError = new Error(`${msg} (offset=${offset})`);
+      }
+    }
+    if (lastError) throw lastError;
+
+    const result = r?.result ?? {};
+    const page = Array.isArray(result?.postings) ? result.postings : [];
+    postings.push(...page);
+
+    if (page.length < LIMIT) break;
+    offset += LIMIT;
+  }
+
+  return postings;
+};
+
+const syncOzonFbsOrders = async (supabase: SupabaseClient) => {
+  const channelId = await fetchChannelId(supabase, "OZON_FBS");
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const windowDays =
+    Number.isFinite(OZON_FBS_SYNC_DAYS) && OZON_FBS_SYNC_DAYS > 0 ? OZON_FBS_SYNC_DAYS : 30;
+  const fromIso = formatOzonIso(new Date(now.getTime() - windowDays * 24 * 60 * 60 * 1000));
+  const toIso = formatOzonIso(now);
+
+  logStep("ozon fbs window", { fromIso, toIso, windowDays });
+  const postings = await listOzonFbsPostings(fromIso, toIso);
+  if (!postings.length) return { imported: 0, skipped: 0, unknown: 0 };
+
+  const orderRowMap = new Map<string, any>();
+  const newlyShipped = new Set<string>();
+  const newlyCanceled = new Set<string>();
+  const orderCreatedAt = new Map<string, string | null>();
+  const orderStatusGroup = new Map<string, string>();
+  const orderItemsById = new Map<string, Map<string, { offerId: string; qty: number }>>();
+  const offerIds = new Set<string>();
+  let unknown = 0;
+
+  const existingMap = new Map<string, { status_group: string; shipped_at?: string | null; canceled_at?: string | null }>();
+  const postingNumbers = Array.from(
+    new Set(
+      postings.map((p: any) => String(p?.posting_number ?? "").trim()).filter(Boolean),
+    ),
+  );
+  for (const slice of chunk(postingNumbers, 200)) {
+    const { data, error } = await supabase
+      .from("mp_fbs_orders")
+      .select("order_id, status_group, shipped_at, canceled_at")
+      .eq("channel_id", channelId)
+      .in("order_id", slice);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      existingMap.set(String(row.order_id), {
+        status_group: row.status_group,
+        shipped_at: row.shipped_at,
+        canceled_at: row.canceled_at,
+      });
+    }
+  }
+
+  for (const posting of postings) {
+    const postingNumber = String(posting?.posting_number ?? "").trim();
+    if (!postingNumber) continue;
+    const status = String(posting?.status ?? "").trim();
+    const nextGroup = pickOzonFbsStatusGroup(status);
+    const existing = existingMap.get(postingNumber);
+    const finalGroup = existing?.status_group === "shipped" || existing?.status_group === "canceled"
+      ? existing.status_group
+      : nextGroup;
+
+    const createdAtRaw = String(posting?.in_process_at ?? posting?.shipment_date ?? posting?.delivering_date ?? "").trim();
+    const createdAt = createdAtRaw ? new Date(createdAtRaw).toISOString() : null;
+    orderCreatedAt.set(postingNumber, createdAt);
+    orderStatusGroup.set(postingNumber, finalGroup);
+    if (finalGroup === "shipped" && !existing?.shipped_at) newlyShipped.add(postingNumber);
+    if (finalGroup === "canceled" && !existing?.canceled_at) newlyCanceled.add(postingNumber);
+
+    orderRowMap.set(postingNumber, {
+      channel_id: channelId,
+      order_id: postingNumber,
+      wb_status: status,
+      supplier_status: null,
+      status_group: finalGroup,
+      order_created_at: createdAt,
+      last_seen_at: nowIso,
+      shipped_at: finalGroup === "shipped" ? existing?.shipped_at ?? nowIso : existing?.shipped_at ?? null,
+      canceled_at: finalGroup === "canceled" ? existing?.canceled_at ?? nowIso : existing?.canceled_at ?? null,
+      updated_at: nowIso,
+    });
+
+    const products = Array.isArray(posting?.products) ? posting.products : [];
+    if (!products.length) continue;
+    const orderItems = orderItemsById.get(postingNumber) ?? new Map();
+
+    for (const product of products) {
+      const offerId = String(product?.offer_id ?? "").trim();
+      if (!offerId) continue;
+      const qty = Number(product?.quantity ?? 0) || 0;
+      if (!qty) continue;
+      const key = offerId.toUpperCase();
+      offerIds.add(key);
+      const prev = orderItems.get(key);
+      if (prev) {
+        prev.qty += qty;
+      } else {
+        orderItems.set(key, { offerId: key, qty });
+      }
+    }
+    if (orderItems.size) orderItemsById.set(postingNumber, orderItems);
+  }
+
+  const orderRows = Array.from(orderRowMap.values());
+  if (orderRows.length) {
+    for (const slice of chunk(orderRows, 500)) {
+      const { error } = await supabase
+        .from("mp_fbs_orders")
+        .upsert(slice, { onConflict: "channel_id,order_id" });
+      if (error) throw error;
+    }
+  }
+
+  const { byOffer } = await fetchItemMapByOffers(supabase, Array.from(offerIds));
+  const itemRowMap = new Map<string, any>();
+  const cleanupQueue: Array<{ orderId: string; itemIds: string[] }> = [];
+  const activeAgg = new Map<string, number>();
+
+  for (const [orderId, items] of orderItemsById.entries()) {
+    const statusGroup = orderStatusGroup.get(orderId) ?? "active";
+    const itemIds: string[] = [];
+
+    for (const row of items.values()) {
+      const mapped = byOffer.get(row.offerId);
+      if (!mapped?.itemId) {
+        unknown += 1;
+        continue;
+      }
+      itemIds.push(mapped.itemId);
+      const rowKey = `${orderId}:${mapped.itemId}`;
+      const existing = itemRowMap.get(rowKey);
+      if (existing) {
+        existing.qty = Number(existing.qty ?? 0) + row.qty;
+        existing.updated_at = nowIso;
+      } else {
+        itemRowMap.set(rowKey, {
+          channel_id: channelId,
+          order_id: orderId,
+          item_id: mapped.itemId,
+          barcode: null,
+          qty: row.qty,
+          updated_at: nowIso,
+        });
+      }
+      if (statusGroup === "active") {
+        activeAgg.set(mapped.itemId, (activeAgg.get(mapped.itemId) ?? 0) + row.qty);
+      }
+    }
+    cleanupQueue.push({ orderId, itemIds });
+  }
+
+  const itemRows = Array.from(itemRowMap.values());
+  if (itemRows.length) {
+    for (const slice of chunk(itemRows, 500)) {
+      const { error } = await supabase
+        .from("mp_fbs_order_items")
+        .upsert(slice, { onConflict: "channel_id,order_id,item_id" });
+      if (error) throw error;
+    }
+  }
+
+  for (const task of cleanupQueue) {
+    if (!task.itemIds.length || task.itemIds.length > 1000) continue;
+    const inList = `(${task.itemIds.map((id) => `"${id}"`).join(",")})`;
+    const { error } = await supabase
+      .from("mp_fbs_order_items")
+      .delete()
+      .eq("channel_id", channelId)
+      .eq("order_id", task.orderId)
+      .not("item_id", "in", inList);
+    if (error) throw error;
+  }
+
+  const planDate = nowIso.slice(0, 10);
+  const supplyRows = Array.from(activeAgg, ([itemId, qty]) => ({
+    channel_id: channelId,
+    destination_id: null,
+    item_id: itemId,
+    plan_date: planDate,
+    qty,
+    status: "planned",
+    shipment_name: "FBS Ozon",
+    shipment_date: null,
+    shipped_at: null,
+    planned_by: "import:ozon-fbs",
+    comment: null,
+    external_supply_id: "FBS_OZON",
+    supply_box_type_id: null,
+    updated_at: nowIso,
+  }));
+
+  if (supplyRows.length) {
+    for (const slice of chunk(supplyRows, 500)) {
+      const { error } = await supabase
+        .from("mp_supply_plans")
+        .upsert(slice, { onConflict: "channel_id,external_supply_id,item_id" });
+      if (error) throw error;
+    }
+  } else {
+    const { error } = await supabase
+      .from("mp_supply_plans")
+      .delete()
+      .eq("channel_id", channelId)
+      .eq("external_supply_id", "FBS_OZON");
+    if (error) throw error;
+  }
+
+  if (activeAgg.size) {
+    const activeItemIds = Array.from(activeAgg.keys());
+    if (activeItemIds.length <= 1000) {
+      const inList = `(${activeItemIds.map((id) => `"${id}"`).join(",")})`;
+      const { error } = await supabase
+        .from("mp_supply_plans")
+        .delete()
+        .eq("channel_id", channelId)
+        .eq("external_supply_id", "FBS_OZON")
+        .not("item_id", "in", inList);
+      if (error) throw error;
+    }
+  }
+
+  const finalizeOrders = new Set<string>([...newlyShipped, ...newlyCanceled]);
+  if (finalizeOrders.size) {
+    const orderIdsToFinalize = Array.from(finalizeOrders);
+    const fbsItems: any[] = [];
+    for (const slice of chunk(orderIdsToFinalize, 200)) {
+      const { data, error } = await supabase
+        .from("mp_fbs_order_items")
+        .select("id, order_id, item_id, qty")
+        .eq("channel_id", channelId)
+        .in("order_id", slice);
+      if (error) throw error;
+      if (data?.length) fbsItems.push(...data);
+    }
+
+    if (fbsItems.length) {
+      const itemIds = fbsItems.map((r) => r.id);
+      const { data: existingHist, error: histErr } = await supabase
+        .from("mp_supply_plans_history")
+        .select("source_plan_id")
+        .in("source_plan_id", itemIds);
+      if (histErr) throw histErr;
+      const existingHistIds = new Set((existingHist ?? []).map((r) => r.source_plan_id));
+
+      const historyRows: any[] = [];
+      const shippedItemIds: string[] = [];
+
+      for (const row of fbsItems) {
+        if (existingHistIds.has(row.id)) continue;
+        const orderId = String(row.order_id ?? "");
+        const isShipped = newlyShipped.has(orderId);
+        const isCanceled = newlyCanceled.has(orderId);
+        if (!isShipped && !isCanceled) continue;
+        const createdAt = orderCreatedAt.get(orderId) ?? null;
+        const planDateIso = createdAt ? createdAt.slice(0, 10) : planDate;
+        historyRows.push({
+          source_plan_id: row.id,
+          channel_id: channelId,
+          destination_id: null,
+          item_id: row.item_id,
+          plan_date: planDateIso,
+          qty: row.qty,
+          status: isCanceled ? "canceled" : "shipped",
+          shipment_name: `FBS Ozon • ${orderId}`,
+          shipment_date: null,
+          shipped_at: isCanceled ? null : nowIso,
+          planned_by: "import:ozon-fbs",
+          comment: null,
+          external_supply_id: orderId,
+          supply_box_type_id: null,
+          archived_at: nowIso,
+          canceled_at: isCanceled ? nowIso : null,
+          created_at: nowIso,
+          updated_at: nowIso,
+        });
+        if (isShipped) shippedItemIds.push(row.id);
+      }
+
+      if (historyRows.length) {
+        for (const slice of chunk(historyRows, 500)) {
+          const { error } = await supabase
+            .from("mp_supply_plans_history")
+            .upsert(slice, { onConflict: "source_plan_id" });
+          if (error) throw error;
+        }
+      }
+
+      if (shippedItemIds.length) {
+        const warehouseId = await getDefaultPhysicalWarehouseId(supabase);
+        if (warehouseId) {
+          const { data: existingMoves, error: moveErr } = await supabase
+            .from("stock_movements")
+            .select("doc_id")
+            .eq("doc_type", "mp_fbs")
+            .in("doc_id", shippedItemIds);
+          if (moveErr) throw moveErr;
+          const existing = new Set((existingMoves ?? []).map((m) => m.doc_id));
+
+          const inserts = fbsItems
+            .filter((row) => shippedItemIds.includes(row.id) && !existing.has(row.id))
+            .map((row) => ({
+              doc_type: "mp_fbs",
+              doc_id: row.id,
+              item_id: row.item_id,
+              warehouse_id: warehouseId,
+              qty: Number(row.qty ?? 0) * -1,
+              created_at: nowIso,
+            }))
+            .filter((row) => Number(row.qty) !== 0);
+
+          if (inserts.length) {
+            for (const slice of chunk(inserts, 500)) {
+              const { error: insErr } = await supabase.from("stock_movements").insert(slice);
+              if (insErr) throw insErr;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  logStep("ozon fbs sync done", { imported: supplyRows.length, unknown, orders: orderRows.length });
+  return { imported: supplyRows.length, skipped: 0, unknown };
+};
+
+const syncWbFbsOrders = async (supabase: SupabaseClient) => {
+  const channelId = await fetchChannelId(supabase, "WB_FBS");
+  const now = new Date();
+  const nowIso = now.toISOString();
+
+  const windowDays = Number.isFinite(WB_FBS_SYNC_DAYS) && WB_FBS_SYNC_DAYS > 0 ? WB_FBS_SYNC_DAYS : 30;
+  const from = new Date(now.getTime() - windowDays * 24 * 60 * 60 * 1000);
+  const fromTs = Math.floor(from.getTime() / 1000);
+  const toTs = Math.floor(now.getTime() / 1000);
+
+  logStep("wb fbs window", { fromTs, toTs, windowDays });
+  const orders = await listWbFbsOrders(fromTs, toTs);
+  if (!orders.length) {
+    return { imported: 0, skipped: 0, unknown: 0 };
+  }
+
+  const orderIdNums = orders
+    .map((o) => Number(o?.id))
+    .filter((n) => Number.isFinite(n)) as number[];
+  const orderIds = orderIdNums.map((n) => String(n));
+
+  const statusMap = await fetchWbFbsStatuses(orderIdNums);
+
+  const existingMap = new Map<string, { status_group: string; shipped_at?: string | null; canceled_at?: string | null }>();
+  for (const slice of chunk(orderIds, 200)) {
+    const { data, error } = await supabase
+      .from("mp_fbs_orders")
+      .select("order_id, status_group, shipped_at, canceled_at")
+      .eq("channel_id", channelId)
+      .in("order_id", slice);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      existingMap.set(String(row.order_id), {
+        status_group: row.status_group,
+        shipped_at: row.shipped_at,
+        canceled_at: row.canceled_at,
+      });
+    }
+  }
+
+  const orderRowMap = new Map<string, any>();
+  const newlyShipped = new Set<string>();
+  const newlyCanceled = new Set<string>();
+  const orderCreatedAt = new Map<string, string | null>();
+  const orderStatusGroup = new Map<string, string>();
+  const allBarcodes = new Set<string>();
+  const orderItemsById = new Map<string, Map<string, { barcode: string; qty: number }>>();
+  let unknown = 0;
+
+  for (const order of orders) {
+    const orderId = parseWbFbsOrderId(order?.id);
+    if (!orderId) continue;
+
+    const status = statusMap.get(orderId);
+    const wbStatus = status?.wbStatus ?? null;
+    const supplierStatus = status?.supplierStatus ?? null;
+    const nextGroup = pickFbsStatusGroup(wbStatus);
+    const existing = existingMap.get(orderId);
+    const finalGroup = existing?.status_group === "shipped" || existing?.status_group === "canceled"
+      ? existing.status_group
+      : nextGroup;
+
+    const createdAtRaw = String(order?.createdAt ?? "").trim();
+    const createdAt = createdAtRaw ? new Date(createdAtRaw).toISOString() : null;
+    orderCreatedAt.set(orderId, createdAt);
+    orderStatusGroup.set(orderId, finalGroup);
+
+    if (finalGroup === "shipped" && !existing?.shipped_at) newlyShipped.add(orderId);
+    if (finalGroup === "canceled" && !existing?.canceled_at) newlyCanceled.add(orderId);
+
+    orderRowMap.set(orderId, {
+      channel_id: channelId,
+      order_id: orderId,
+      wb_status: wbStatus,
+      supplier_status: supplierStatus,
+      status_group: finalGroup,
+      order_created_at: createdAt,
+      last_seen_at: nowIso,
+      shipped_at: finalGroup === "shipped" ? existing?.shipped_at ?? nowIso : existing?.shipped_at ?? null,
+      canceled_at: finalGroup === "canceled" ? existing?.canceled_at ?? nowIso : existing?.canceled_at ?? null,
+      updated_at: nowIso,
+    });
+
+    const skus = Array.isArray(order?.skus) ? order.skus : [];
+    const rawQty = Number(order?.quantity ?? order?.count ?? order?.qty ?? 1);
+    const qtyPerSku = Number.isFinite(rawQty) && rawQty > 0 ? rawQty : 1;
+    if (!skus.length) continue;
+
+    const orderItems = orderItemsById.get(orderId) ?? new Map();
+    for (const sku of skus) {
+      const barcode = String(sku ?? "").trim();
+      if (!barcode) continue;
+      allBarcodes.add(barcode);
+      const prev = orderItems.get(barcode);
+      if (prev) {
+        prev.qty += qtyPerSku;
+      } else {
+        orderItems.set(barcode, { barcode, qty: qtyPerSku });
+      }
+    }
+    if (orderItems.size) orderItemsById.set(orderId, orderItems);
+  }
+
+  const orderRows = Array.from(orderRowMap.values());
+  if (orderRows.length) {
+    for (const slice of chunk(orderRows, 500)) {
+      const { error } = await supabase
+        .from("mp_fbs_orders")
+        .upsert(slice, { onConflict: "channel_id,order_id" });
+      if (error) throw error;
+    }
+  }
+
+  const { byBarcode } = allBarcodes.size
+    ? await fetchItemMap(supabase, Array.from(allBarcodes))
+    : { byBarcode: new Map<string, { itemId: string }>() };
+
+  const itemRowMap = new Map<string, any>();
+  const cleanupQueue: Array<{ orderId: string; itemIds: string[] }> = [];
+  const activeAgg = new Map<string, number>();
+
+  for (const [orderId, items] of orderItemsById.entries()) {
+    const mappedItems = new Map<string, { itemId: string; qty: number; barcode: string }>();
+    for (const it of items.values()) {
+      const mapped = byBarcode.get(it.barcode);
+      if (!mapped?.itemId) {
+        unknown += 1;
+        continue;
+      }
+      const prev = mappedItems.get(mapped.itemId);
+      if (prev) {
+        prev.qty += it.qty;
+      } else {
+        mappedItems.set(mapped.itemId, { itemId: mapped.itemId, qty: it.qty, barcode: it.barcode });
+      }
+    }
+
+    if (!mappedItems.size) continue;
+
+    const existing = existingMap.get(orderId);
+    const statusGroup = orderStatusGroup.get(orderId) ?? existing?.status_group ?? "active";
+
+    const itemIds: string[] = [];
+    for (const row of mappedItems.values()) {
+      itemIds.push(row.itemId);
+      const rowKey = `${orderId}:${row.itemId}`;
+      const existing = itemRowMap.get(rowKey);
+      if (existing) {
+        existing.qty = Number(existing.qty ?? 0) + row.qty;
+        if (!existing.barcode && row.barcode) existing.barcode = row.barcode;
+        existing.updated_at = nowIso;
+      } else {
+        itemRowMap.set(rowKey, {
+          channel_id: channelId,
+          order_id: orderId,
+          item_id: row.itemId,
+          barcode: row.barcode,
+          qty: row.qty,
+          updated_at: nowIso,
+        });
+      }
+      if (statusGroup === "active") {
+        activeAgg.set(row.itemId, (activeAgg.get(row.itemId) ?? 0) + row.qty);
+      }
+    }
+    cleanupQueue.push({ orderId, itemIds });
+  }
+
+  const itemRows = Array.from(itemRowMap.values());
+  if (itemRows.length) {
+    for (const slice of chunk(itemRows, 500)) {
+      const { error } = await supabase
+        .from("mp_fbs_order_items")
+        .upsert(slice, { onConflict: "channel_id,order_id,item_id" });
+      if (error) throw error;
+    }
+  }
+
+  for (const task of cleanupQueue) {
+    if (!task.itemIds.length || task.itemIds.length > 1000) continue;
+    const inList = `(${task.itemIds.map((id) => `"${id}"`).join(",")})`;
+    const { error } = await supabase
+      .from("mp_fbs_order_items")
+      .delete()
+      .eq("channel_id", channelId)
+      .eq("order_id", task.orderId)
+      .not("item_id", "in", inList);
+    if (error) throw error;
+  }
+
+  const planDate = nowIso.slice(0, 10);
+  const supplyRows = Array.from(activeAgg, ([itemId, qty]) => ({
+    channel_id: channelId,
+    destination_id: null,
+    item_id: itemId,
+    plan_date: planDate,
+    qty,
+    status: "planned",
+    shipment_name: "FBS WB",
+    shipment_date: null,
+    shipped_at: null,
+    planned_by: "import:wb-fbs",
+    comment: null,
+    external_supply_id: "FBS_WB",
+    supply_box_type_id: null,
+    updated_at: nowIso,
+  }));
+
+  if (supplyRows.length) {
+    for (const slice of chunk(supplyRows, 500)) {
+      const { error } = await supabase
+        .from("mp_supply_plans")
+        .upsert(slice, { onConflict: "channel_id,external_supply_id,item_id" });
+      if (error) throw error;
+    }
+  } else {
+    const { error } = await supabase
+      .from("mp_supply_plans")
+      .delete()
+      .eq("channel_id", channelId)
+      .eq("external_supply_id", "FBS_WB");
+    if (error) throw error;
+  }
+
+  if (activeAgg.size) {
+    const activeItemIds = Array.from(activeAgg.keys());
+    if (activeItemIds.length <= 1000) {
+      const inList = `(${activeItemIds.map((id) => `"${id}"`).join(",")})`;
+      const { error } = await supabase
+        .from("mp_supply_plans")
+        .delete()
+        .eq("channel_id", channelId)
+        .eq("external_supply_id", "FBS_WB")
+        .not("item_id", "in", inList);
+      if (error) throw error;
+    }
+  }
+
+  const finalizeOrders = new Set<string>([...newlyShipped, ...newlyCanceled]);
+  if (finalizeOrders.size) {
+    const orderIdsToFinalize = Array.from(finalizeOrders);
+    const fbsItems: any[] = [];
+    for (const slice of chunk(orderIdsToFinalize, 200)) {
+      const { data, error } = await supabase
+        .from("mp_fbs_order_items")
+        .select("id, order_id, item_id, qty")
+        .eq("channel_id", channelId)
+        .in("order_id", slice);
+      if (error) throw error;
+      if (data?.length) fbsItems.push(...data);
+    }
+
+    if (fbsItems.length) {
+      const itemIds = fbsItems.map((r) => r.id);
+      const { data: existingHist, error: histErr } = await supabase
+        .from("mp_supply_plans_history")
+        .select("source_plan_id")
+        .in("source_plan_id", itemIds);
+      if (histErr) throw histErr;
+      const existingHistIds = new Set((existingHist ?? []).map((r) => r.source_plan_id));
+
+      const historyRows: any[] = [];
+      const shippedItemIds: string[] = [];
+
+      for (const row of fbsItems) {
+        if (existingHistIds.has(row.id)) continue;
+        const orderId = String(row.order_id ?? "");
+        const isShipped = newlyShipped.has(orderId);
+        const isCanceled = newlyCanceled.has(orderId);
+        if (!isShipped && !isCanceled) continue;
+        const createdAt = orderCreatedAt.get(orderId) ?? null;
+        const planDateIso = createdAt ? createdAt.slice(0, 10) : planDate;
+        historyRows.push({
+          source_plan_id: row.id,
+          channel_id: channelId,
+          destination_id: null,
+          item_id: row.item_id,
+          plan_date: planDateIso,
+          qty: row.qty,
+          status: isCanceled ? "canceled" : "shipped",
+          shipment_name: `FBS WB • ${orderId}`,
+          shipment_date: null,
+          shipped_at: isCanceled ? null : nowIso,
+          planned_by: "import:wb-fbs",
+          comment: null,
+          external_supply_id: orderId,
+          supply_box_type_id: null,
+          archived_at: nowIso,
+          canceled_at: isCanceled ? nowIso : null,
+          created_at: nowIso,
+          updated_at: nowIso,
+        });
+        if (isShipped) shippedItemIds.push(row.id);
+      }
+
+      if (historyRows.length) {
+        for (const slice of chunk(historyRows, 500)) {
+          const { error } = await supabase
+            .from("mp_supply_plans_history")
+            .upsert(slice, { onConflict: "source_plan_id" });
+          if (error) throw error;
+        }
+      }
+
+      if (shippedItemIds.length) {
+        const warehouseId = await getDefaultPhysicalWarehouseId(supabase);
+        if (warehouseId) {
+          const { data: existingMoves, error: moveErr } = await supabase
+            .from("stock_movements")
+            .select("doc_id")
+            .eq("doc_type", "mp_fbs")
+            .in("doc_id", shippedItemIds);
+          if (moveErr) throw moveErr;
+          const existing = new Set((existingMoves ?? []).map((m) => m.doc_id));
+
+          const inserts = fbsItems
+            .filter((row) => shippedItemIds.includes(row.id) && !existing.has(row.id))
+            .map((row) => ({
+              doc_type: "mp_fbs",
+              doc_id: row.id,
+              item_id: row.item_id,
+              warehouse_id: warehouseId,
+              qty: Number(row.qty ?? 0) * -1,
+              created_at: nowIso,
+            }))
+            .filter((row) => Number(row.qty) !== 0);
+
+          if (inserts.length) {
+            for (const slice of chunk(inserts, 500)) {
+              const { error: insErr } = await supabase.from("stock_movements").insert(slice);
+              if (insErr) throw insErr;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  logStep("wb fbs sync done", { imported: supplyRows.length, unknown, orders: orderRows.length });
+  return { imported: supplyRows.length, skipped: 0, unknown };
+};
+
 const syncWbSupplyPlans = async (supabase: SupabaseClient, statusIds: number[]) => {
   const channelId = await fetchChannelId(supabase, "WB");
   const destMap = await fetchDestinationsMap(supabase, channelId);
@@ -1680,26 +2563,40 @@ serve(async (req) => {
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, { status: 405 });
 
   const authHeader = req.headers.get("Authorization");
-  if (!authHeader) {
-    return jsonResponse({ error: "Authorization required" }, { status: 401 });
-  }
+  const accessToken = authHeader?.replace(/^Bearer\s+/i, "").trim();
+  const cronHeader = req.headers.get("x-cron-secret");
+  const isCron = Boolean(SYNC_MP_CRON_SECRET && cronHeader === SYNC_MP_CRON_SECRET);
 
-  const userClient = getUserClient(authHeader);
-  const { data: userData, error: userError } = await userClient.auth.getUser();
-  if (userError || !userData?.user) {
-    return jsonResponse({ error: "Unauthorized" }, { status: 401 });
-  }
+  let supabase = getAdminClient();
+  if (!isCron) {
+    if (!authHeader) {
+      return jsonResponse({ error: "Authorization required" }, { status: 401 });
+    }
 
-  const { data: profile, error: profileError } = await userClient
-    .from("profiles")
-    .select("is_active")
-    .eq("id", userData.user.id)
-    .maybeSingle();
-  if (profileError || !profile?.is_active) {
-    return jsonResponse({ error: "Forbidden" }, { status: 403 });
-  }
+    const userClient = getUserClient(authHeader);
+    const { data: userData, error: userError } = accessToken
+      ? await userClient.auth.getUser(accessToken)
+      : await userClient.auth.getUser();
+    if (userError || !userData?.user) {
+      const details = userError
+        ? { message: userError.message, status: (userError as any).status }
+        : undefined;
+      return jsonResponse({ error: "Unauthorized", details }, { status: 401 });
+    }
 
-  const supabase = getAdminClient() ?? userClient;
+    const { data: profile, error: profileError } = await userClient
+      .from("profiles")
+      .select("is_active")
+      .eq("id", userData.user.id)
+      .maybeSingle();
+    if (profileError || !profile?.is_active) {
+      return jsonResponse({ error: "Forbidden" }, { status: 403 });
+    }
+
+    supabase = supabase ?? userClient;
+  } else if (!supabase) {
+    return jsonResponse({ error: "Service role key required for cron" }, { status: 500 });
+  }
 
   let body: Record<string, unknown> = {};
   try {
@@ -1735,7 +2632,15 @@ serve(async (req) => {
       const result = await syncWbSupplyPlans(supabase, statusIds.length ? statusIds : WB_STATUS_IDS_DEFAULT);
       return jsonResponse({ channel, ...result });
     }
-    return jsonResponse({ error: "channel must be OZON or WB" }, { status: 400 });
+    if (channel === "WB_FBS") {
+      const result = await syncWbFbsOrders(supabase);
+      return jsonResponse({ channel, ...result });
+    }
+    if (channel === "OZON_FBS") {
+      const result = await syncOzonFbsOrders(supabase);
+      return jsonResponse({ channel, ...result });
+    }
+    return jsonResponse({ error: "channel must be OZON, WB, WB_FBS or OZON_FBS" }, { status: 400 });
   } catch (err) {
     console.error("sync-mp-supply-plans", err);
     const message = err instanceof Error ? err.message : "Unknown error";
