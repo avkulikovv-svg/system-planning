@@ -124,6 +124,15 @@ type ItemRow = {
   shelf_life_required?: boolean | null;
 };
 
+type PalletHint = {
+  palletIndex: number;
+  itemId: string;
+  code: string;
+  name: string;
+  addBoxes: number;
+  perLayer: number;
+};
+
 const formatDateShort = (iso: string) => {
   const d = new Date(`${iso}T00:00:00`);
   if (Number.isNaN(d.getTime())) return iso;
@@ -414,6 +423,8 @@ export function MarketplacesView({ isAdmin, canWb, canOzon, canReports }: Market
   const [palletMaxWeight, setPalletMaxWeight] = React.useState<string>("");
   const [palletMaxHeight, setPalletMaxHeight] = React.useState<string>("");
   const [palletLimits, setPalletLimits] = React.useState<PalletLimits>(DEFAULT_PALLET_LIMITS);
+  const [columnPalletHints, setColumnPalletHints] = React.useState<Record<string, PalletHint[]>>({});
+  const [palletHintOpen, setPalletHintOpen] = React.useState<string | null>(null);
   const [hasSupplyBoxType, setHasSupplyBoxType] = React.useState(true);
   const [warehouseUpdating, setWarehouseUpdating] = React.useState<string | null>(null);
   const allowedChannelGroups = React.useMemo(
@@ -662,6 +673,114 @@ export function MarketplacesView({ isAdmin, canWb, canOzon, canReports }: Market
       return { limits: merged, mode };
     },
     [destinationById],
+  );
+
+  const buildPalletHintsForColumn = React.useCallback(
+    (col: SupplyColumn): PalletHint[] => {
+      const supplyItems = items
+        .map((item) => ({
+          item,
+          qty: Number(matrix[item.id]?.[col.id] ?? 0),
+        }))
+        .filter((row) => row.qty > 0);
+
+      if (!supplyItems.length) return [];
+
+      const { limits } = resolvePalletLimits(col);
+      const inputs = supplyItems.map(({ item, qty }) => ({
+        itemId: item.id,
+        code: item.code,
+        name: item.name,
+        category: item.group,
+        qty,
+        unitsPerBox: item.units_per_box,
+        unitWeight: item.unit_weight,
+        boxLength: item.box_length,
+        boxWidth: item.box_width,
+        boxHeight: item.box_height,
+        boxWeight: item.box_weight,
+        boxVolume: item.box_volume,
+        boxOrientation: item.box_orientation,
+      }));
+
+      const plan = distributePallets(inputs, limits);
+      if (plan.errors.length) return [];
+
+      const closeDensity = (a: number, b: number, rel = 0.05) => {
+        const max = Math.max(Math.abs(a), Math.abs(b), 1);
+        return Math.abs(a - b) / max <= rel;
+      };
+      const sizeKey = (dims: [number, number, number]) =>
+        dims
+          .slice()
+          .sort((a, b) => a - b)
+          .join("x");
+      const perLayerFor = (dims: [number, number, number]) => {
+        const [l, w] = dims;
+        const fit1 = Math.floor(limits.lengthCm / l) * Math.floor(limits.widthCm / w);
+        const fit2 = Math.floor(limits.lengthCm / w) * Math.floor(limits.widthCm / l);
+        return Math.max(fit1, fit2, 1);
+      };
+
+      const hints: PalletHint[] = [];
+
+      plan.pallets.forEach((pallet, palletIdx) => {
+        const groups: Array<{
+          size: string;
+          density: number;
+          perLayer: number;
+          boxes: number;
+          items: typeof pallet.items;
+        }> = [];
+
+        pallet.items.forEach((part) => {
+          const key = sizeKey(part.dims);
+          const existing = groups.find(
+            (g) => g.size === key && closeDensity(g.density, part.density),
+          );
+          if (existing) {
+            existing.boxes += part.boxes;
+            existing.items.push(part);
+          } else {
+            groups.push({
+              size: key,
+              density: part.density,
+              perLayer: perLayerFor(part.dims),
+              boxes: part.boxes,
+              items: [part],
+            });
+          }
+        });
+
+        groups.forEach((g) => {
+          if (g.perLayer <= 0) return;
+          const remainder = g.boxes % g.perLayer;
+          if (!remainder) return;
+          const addBoxes = g.perLayer - remainder;
+          const candidate = g.items
+            .slice()
+            .sort((a, b) => b.boxes - a.boxes)[0];
+          if (!candidate) return;
+
+          const extraWeight = candidate.perBoxWeightKg * addBoxes;
+          const extraVolume = candidate.perBoxVolumeM3 * addBoxes;
+          if (pallet.weightKg + extraWeight > limits.maxWeightKg + limits.maxWeightToleranceKg) return;
+          if (pallet.volumeM3 + extraVolume > limits.maxVolumeM3) return;
+
+          hints.push({
+            palletIndex: palletIdx + 1,
+            itemId: candidate.itemId,
+            code: candidate.code,
+            name: candidate.name,
+            addBoxes,
+            perLayer: g.perLayer,
+          });
+        });
+      });
+
+      return hints;
+    },
+    [items, matrix, resolvePalletLimits],
   );
 
   React.useEffect(() => {
@@ -954,6 +1073,7 @@ export function MarketplacesView({ isAdmin, canWb, canOzon, canReports }: Market
       const totalWeight = pallet.weightKg + DEFAULT_PALLET_WEIGHT_KG;
       const totalBoxes = pallet.items.reduce((sum, it) => sum + it.boxes, 0);
       const items = pallet.items.slice().sort((a, b) => {
+        if (a.density !== b.density) return b.density - a.density;
         const order = { heavy: 0, normal: 1, light: 2 } as const;
         return order[a.weightClass] - order[b.weightClass];
       });
@@ -1232,6 +1352,17 @@ export function MarketplacesView({ isAdmin, canWb, canOzon, canReports }: Market
     return columnsVisible.filter((col) => !col.warehouseShippedAt);
   }, [columnsVisible, warehouseFilter]);
   const visibleColumns = filteredByWarehouse.filter((col) => filters[col.channel]);
+  React.useEffect(() => {
+    if (!visibleColumns.length) {
+      setColumnPalletHints({});
+      return;
+    }
+    const next: Record<string, PalletHint[]> = {};
+    visibleColumns.forEach((col) => {
+      next[col.id] = buildPalletHintsForColumn(col);
+    });
+    setColumnPalletHints(next);
+  }, [visibleColumns, buildPalletHintsForColumn]);
   const activeColumnIds = React.useMemo(() => new Set(activeColumns.map((col) => col.id)), [activeColumns]);
   const reserveByItem = React.useMemo(() => {
     const next: Record<string, number> = {};
@@ -1962,6 +2093,7 @@ export function MarketplacesView({ isAdmin, canWb, canOzon, canReports }: Market
                 const remainingVolume = palletLimits.maxVolumeM3 - pallet.volumeM3;
                 const incomplete = totalWeight <= maxGross * 0.8 && pallet.heightCm < palletLimits.maxHeightCm;
                 const items = pallet.items.slice().sort((a, b) => {
+                  if (a.density !== b.density) return b.density - a.density;
                   const order = { heavy: 0, normal: 1, light: 2 } as const;
                   return order[a.weightClass] - order[b.weightClass];
                 });
@@ -2045,8 +2177,27 @@ export function MarketplacesView({ isAdmin, canWb, canOzon, canReports }: Market
                       key={col.id}
                       className={`mp-matrix__col${columnRiskById[col.id] ? ` mp-matrix__col--${columnRiskById[col.id]}` : ""}${col.warehouseShippedAt ? " mp-matrix__col--warehouse" : ""}`}
                     >
+                      {palletHintOpen === col.id && (
+                        <div className="mp-hint-backdrop" onClick={() => setPalletHintOpen(null)} />
+                      )}
                       <div className="mp-matrix__col-inner">
-                        <div className="mp-matrix__col-title">{col.title}</div>
+                        <div className="mp-matrix__col-title">
+                          {col.title}
+                          {columnPalletHints[col.id]?.length ? (
+                            <button
+                              type="button"
+                              className="mp-hint-dot"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPalletHintOpen((prev) => (prev === col.id ? null : col.id));
+                              }}
+                              title="Есть предложения для плотной укладки"
+                              aria-label="Есть предложения для плотной укладки"
+                            >
+                              <span className="mp-hint-dot__core" />
+                            </button>
+                          ) : null}
+                        </div>
                         <small>{col.subtitle}</small>
                         {col.warehouseShippedAt && (
                           <div className="mp-matrix__col-badge">
@@ -2062,6 +2213,22 @@ export function MarketplacesView({ isAdmin, canWb, canOzon, canReports }: Market
                             {col.warehouseShippedAt ? "Отменить отгрузку" : "Отгрузить"}
                           </button>
                         </div>
+                        {palletHintOpen === col.id && columnPalletHints[col.id]?.length ? (
+                          <div className="mp-hint-popover">
+                            <div className="mp-hint-popover__title">Можно добить слой</div>
+                            <div className="mp-hint-popover__list">
+                              {columnPalletHints[col.id].slice(0, 6).map((hint) => (
+                                <div key={`${hint.itemId}-${hint.palletIndex}-${hint.addBoxes}`} className="mp-hint-row">
+                                  <div className="mp-hint-row__main">
+                                    Палета {hint.palletIndex}: +{hint.addBoxes} кор. ({hint.perLayer} в ряду)
+                                  </div>
+                                  <div className="mp-hint-row__code">{hint.code}</div>
+                                  <div className="mp-hint-row__name">{hint.name}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
                     </th>
                   ))

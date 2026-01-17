@@ -6,6 +6,7 @@ export type PalletLimits = {
   maxWeightKg: number;
   maxWeightToleranceKg: number;
   maxVolumeM3: number;
+  boxesPerRow?: number;
 };
 
 export type PalletWarning = {
@@ -14,6 +15,12 @@ export type PalletWarning = {
   name: string;
   message: string;
   level: "error" | "warn";
+};
+
+export type PalletPlacementInfo = {
+  maxBoxes: number | null;
+  rowBoxes: number | null;
+  orientation: "" | "стоя" | "нормально";
 };
 
 export type SupplyItemInput = {
@@ -41,6 +48,7 @@ export type PalletPart = {
   boxes: number;
   perBoxWeightKg: number;
   perBoxVolumeM3: number;
+  density: number;
   weightKg: number;
   volumeM3: number;
   dims: [number, number, number];
@@ -72,6 +80,7 @@ export const DEFAULT_PALLET_LIMITS: PalletLimits = {
   maxWeightKg: 510,
   maxWeightToleranceKg: 1,
   maxVolumeM3: 1.728,
+  boxesPerRow: 0,
 };
 
 export const DEFAULT_PALLET_WEIGHT_KG = 20;
@@ -92,6 +101,68 @@ const closeEnough = (a: number, b: number, rel = 0.05) => {
   if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
   const max = Math.max(Math.abs(a), Math.abs(b), 1);
   return Math.abs(a - b) / max <= rel;
+};
+
+const normalizeBoxesPerRow = (limits: PalletLimits) => {
+  const raw = Math.floor(asNumber(limits.boxesPerRow));
+  return raw > 0 ? raw : null;
+};
+
+const getLayerMetrics = (dims: [number, number, number], limits: PalletLimits) => {
+  const [l, w] = dims;
+  const targetRow = normalizeBoxesPerRow(limits);
+
+  const fitL1 = Math.floor(limits.lengthCm / l);
+  const fitW1 = Math.floor(limits.widthCm / w);
+  const row1 = Math.max(1, targetRow ? Math.min(fitW1, targetRow) : fitW1 || 1);
+  const perLayer1 = Math.max(1, fitL1 * row1);
+
+  const fitL2 = Math.floor(limits.lengthCm / w);
+  const fitW2 = Math.floor(limits.widthCm / l);
+  const row2 = Math.max(1, targetRow ? Math.min(fitW2, targetRow) : fitW2 || 1);
+  const perLayer2 = Math.max(1, fitL2 * row2);
+
+  if (perLayer2 > perLayer1) return { perLayer: perLayer2, rowSize: row2 };
+  if (perLayer1 > perLayer2) return { perLayer: perLayer1, rowSize: row1 };
+  if (targetRow) {
+    const diff1 = Math.abs(row1 - targetRow);
+    const diff2 = Math.abs(row2 - targetRow);
+    if (diff2 < diff1) return { perLayer: perLayer2, rowSize: row2 };
+  }
+  return row1 >= row2 ? { perLayer: perLayer1, rowSize: row1 } : { perLayer: perLayer2, rowSize: row2 };
+};
+
+const buildSizeKey = (dims: [number, number, number]) =>
+  dims
+    .slice()
+    .sort((a, b) => a - b)
+    .join("x");
+
+export const computePalletPlacementInfo = (
+  l: number,
+  w: number,
+  h: number,
+  perBoxWeightKg: number,
+  perBoxVolumeM3: number,
+  limits: PalletLimits = DEFAULT_PALLET_LIMITS,
+): PalletPlacementInfo => {
+  if (l <= 0 || w <= 0 || h <= 0 || perBoxWeightKg <= 0 || perBoxVolumeM3 <= 0) {
+    return { maxBoxes: null, rowBoxes: null, orientation: "" };
+  }
+
+  const { dims, orientation } = detectOrientation(l, w, h, perBoxWeightKg, perBoxVolumeM3, limits);
+  const { perLayer } = getLayerMetrics(dims, limits);
+  const availH = limits.maxHeightCm - limits.palletHeightCm;
+  const layers = Math.floor(availH / dims[2]);
+  const limVol = Math.floor(limits.maxVolumeM3 / perBoxVolumeM3);
+  const limKg = Math.floor(limits.maxWeightKg / perBoxWeightKg);
+  const maxBoxes = Math.min(limVol, limKg, perLayer * layers);
+
+  return {
+    maxBoxes: maxBoxes > 0 ? maxBoxes : null,
+    rowBoxes: perLayer > 0 ? perLayer : null,
+    orientation,
+  };
 };
 
 export const calcBoxVolumeM3 = (l: number, w: number, h: number) =>
@@ -130,11 +201,7 @@ const detectOrientation = (
   perms.forEach((p) => {
     const [d1, d2, d3] = p.dims;
     if (p.tag === "стоя" && (h * 2 < l || h * 2 < w)) return;
-    const perLayer = Math.max(
-      Math.floor(limits.lengthCm / d1) * Math.floor(limits.widthCm / d2),
-      Math.floor(limits.lengthCm / d2) * Math.floor(limits.widthCm / d1),
-      1,
-    );
+    const { perLayer } = getLayerMetrics([d1, d2, d3], limits);
     const layers = Math.floor(availH / d3);
     const cnt = Math.min(limVol, limKg, perLayer * layers);
     if (cnt > bestCnt) {
@@ -148,15 +215,11 @@ const detectOrientation = (
 };
 
 export const computePalletHeightCm = (items: PalletPart[], limits: PalletLimits) => {
-  const baseL = limits.lengthCm;
-  const baseW = limits.widthCm;
   let h = 0;
 
   for (const it of items) {
-    const [l, w, ht] = it.dims;
-    const fit1 = Math.floor(baseL / l) * Math.floor(baseW / w);
-    const fit2 = Math.floor(baseL / w) * Math.floor(baseW / l);
-    const perLayer = Math.max(fit1, fit2, 1);
+    const [, , ht] = it.dims;
+    const { perLayer } = getLayerMetrics(it.dims, limits);
     h += Math.ceil(it.boxes / perLayer) * ht;
   }
 
@@ -223,19 +286,59 @@ const splitIntoPalletParts = (sku: PalletPart, limits: PalletLimits, errors: Pal
   return parts;
 };
 
-const buildQueue = (seed: PalletPart, leftovers: PalletPart[]) => {
-  const sameCat = leftovers.filter((x) => x.category === seed.category);
-  const same1 = sameCat.filter((x) => x.weightClass === seed.weightClass);
-  const same2 = sameCat.filter((x) => x.weightClass !== seed.weightClass);
-  const other = leftovers.filter((x) => x.category !== seed.category);
-  const sortByWeight = (arr: PalletPart[]) =>
-    arr.slice().sort((a, b) => WT_ORDER[a.weightClass] - WT_ORDER[b.weightClass]);
-  return [...sortByWeight(same1), ...sortByWeight(same2), ...sortByWeight(other)];
+const buildQueue = (seed: PalletPart, leftovers: PalletPart[], limits: PalletLimits) => {
+  const seedSize = buildSizeKey(seed.dims);
+  const isSameDensity = (a: PalletPart) => closeEnough(a.density, seed.density);
+  const sameSku = leftovers.filter((x) => x.itemId === seed.itemId);
+  const sameSizeDensity = leftovers.filter(
+    (x) => x.itemId !== seed.itemId && buildSizeKey(x.dims) === seedSize && isSameDensity(x),
+  );
+  const sameSizeWeight = leftovers.filter(
+    (x) =>
+      x.itemId !== seed.itemId &&
+      buildSizeKey(x.dims) === seedSize &&
+      x.weightClass === seed.weightClass &&
+      !isSameDensity(x),
+  );
+  const sameWeight = leftovers.filter(
+    (x) =>
+      x.itemId !== seed.itemId &&
+      x.weightClass === seed.weightClass &&
+      buildSizeKey(x.dims) !== seedSize &&
+      isSameDensity(x),
+  );
+  const other = leftovers.filter((x) => x.itemId !== seed.itemId && x.weightClass !== seed.weightClass);
+
+  const sortByRowFill = (arr: PalletPart[]) =>
+    arr.slice().sort((a, b) => {
+      const aRow = getLayerMetrics(a.dims, limits).rowSize;
+      const bRow = getLayerMetrics(b.dims, limits).rowSize;
+      const aRem = aRow > 0 ? a.boxes % aRow : a.boxes;
+      const bRem = bRow > 0 ? b.boxes % bRow : b.boxes;
+      const aFull = aRow > 0 ? Math.floor(a.boxes / aRow) : 0;
+      const bFull = bRow > 0 ? Math.floor(b.boxes / bRow) : 0;
+      const aFullRow = aRem === 0;
+      const bFullRow = bRem === 0;
+      if (aFullRow !== bFullRow) return aFullRow ? -1 : 1;
+      if (aRem !== bRem) return aRem - bRem;
+      if (aFull !== bFull) return bFull - aFull;
+      if (a.boxes !== b.boxes) return b.boxes - a.boxes;
+      if (a.density !== b.density) return b.density - a.density;
+      return WT_ORDER[a.weightClass] - WT_ORDER[b.weightClass];
+    });
+
+  return [
+    ...sortByRowFill(sameSku),
+    ...sortByRowFill(sameSizeDensity),
+    ...sortByRowFill(sameSizeWeight),
+    ...sortByRowFill(sameWeight),
+    ...sortByRowFill(other),
+  ];
 };
 
 const fillPallet = (pallet: Pallet, leftovers: PalletPart[], limits: PalletLimits) => {
   if (!pallet.seed) return;
-  const queue = buildQueue(pallet.seed, leftovers);
+  const queue = buildQueue(pallet.seed, leftovers, limits);
   for (const item of queue) {
     if (!leftovers.find((x) => x.partId === item.partId)) continue;
     if (!canFit(pallet, item, limits)) continue;
@@ -402,6 +505,7 @@ export const distributePallets = (items: SupplyItemInput[], limits: PalletLimits
       boxes,
       perBoxWeightKg: perBoxWeight,
       perBoxVolumeM3: volume,
+      density,
       weightKg: perBoxWeight * boxes,
       volumeM3: volume * boxes,
       dims,

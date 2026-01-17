@@ -10,6 +10,7 @@ import { supabase } from "./api/supabaseClient";
 import SpecModal from "./components/specs/SpecModal";
 import { fetchSpecsFromSupabase } from "./utils/specSupabase";
 import { generateUuid } from "./utils/supabaseItems";
+import { computePalletPlacementInfo } from "./utils/pallets";
 import {
   fetchReceiptsSupabase,
   fetchReceiptLinesSupabase,
@@ -861,63 +862,16 @@ function ProductForm({
           : "Лёгкий";
 
   const palletInfo = React.useMemo(() => {
-    const l = Number(m.boxLength ?? 0);
-    const w = Number(m.boxWidth ?? 0);
-    const h = Number(m.boxHeight ?? 0);
-    if (!boxVolumeM3 || l <= 0 || w <= 0 || h <= 0 || !boxWeightCalc) {
-      return { maxBoxes: null, orientation: "" };
+    if (!boxVolumeM3 || !boxWeightCalc) {
+      return { maxBoxes: null, orientation: "", rowBoxes: null };
     }
-
-    const PAL_W_CM = 120;
-    const PAL_D_CM = 80;
-    const PAL_TOTAL_H_CM = 180;
-    const PAL_SELF_H_CM = 14;
-    const PAL_AVAIL_H_CM = PAL_TOTAL_H_CM - PAL_SELF_H_CM;
-    const PAL_VOL_M3 = 1.2 * 0.8 * 1.8;
-    const PAL_MAX_KG = 500;
-
-    const limVol = Math.floor(PAL_VOL_M3 / boxVolumeM3);
-    const limKg = Math.floor(PAL_MAX_KG / boxWeightCalc);
-
-    const perms = [
-      { dims: [l, w, h], tag: "нормально" },
-      { dims: [w, l, h], tag: "нормально" },
-      { dims: [l, h, w], tag: "стоя" },
-      { dims: [h, l, w], tag: "стоя" },
-      { dims: [w, h, l], tag: "стоя" },
-      { dims: [h, w, l], tag: "стоя" },
-    ];
-
-    let bestCnt = 0;
-    let bestTag = "";
-    let bestBase: [number, number] = [0, 0];
-
-    perms.forEach((p) => {
-      if (p.tag === "стоя" && (h * 2 < l || h * 2 < w)) return;
-
-      const [d1, d2, d3] = p.dims;
-      const baseCount =
-        Math.floor(PAL_W_CM / d1) *
-        Math.floor(PAL_D_CM / d2) *
-        Math.floor(PAL_AVAIL_H_CM / d3);
-      const cnt = Math.min(limVol, limKg, baseCount);
-
-      if (cnt > bestCnt) {
-        bestCnt = cnt;
-        bestTag = p.tag;
-        bestBase = [d1, d2];
-      }
-    });
-
-    if (!bestCnt) return { maxBoxes: null, orientation: "" };
-
-    return {
-      maxBoxes: bestCnt,
-      orientation:
-        bestTag === "стоя"
-          ? `стоя (основание: ${bestBase[0]}×${bestBase[1]})`
-          : "нормально",
-    };
+    return computePalletPlacementInfo(
+      Number(m.boxLength ?? 0),
+      Number(m.boxWidth ?? 0),
+      Number(m.boxHeight ?? 0),
+      boxWeightCalc,
+      boxVolumeM3,
+    );
   }, [m.boxLength, m.boxWidth, m.boxHeight, boxVolumeM3, boxWeightCalc]);
 
   const save = (e: React.FormEvent) => {
@@ -1221,6 +1175,16 @@ function ProductForm({
           <input
             className="form-control w-full"
             value={palletInfo.maxBoxes == null ? "" : String(palletInfo.maxBoxes)}
+            placeholder="—"
+            readOnly
+          />
+        </div>
+
+        <div>
+          <Label>Коробов в ряду на палете (расчёт)</Label>
+          <input
+            className="form-control w-full"
+            value={palletInfo.rowBoxes == null ? "" : String(palletInfo.rowBoxes)}
             placeholder="—"
             readOnly
           />
