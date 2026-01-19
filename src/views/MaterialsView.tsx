@@ -1137,25 +1137,75 @@ export default function MaterialsView() {
       if (!specId) return;
       const legacyId = semi?.id?.trim();
       if (!legacyId) return;
-      const { data, error } = await supabase
-        .from("items")
-        .select("id")
-        .eq("legacy_id", legacyId)
-        .eq("kind", "semi")
-        .limit(1);
-      if (error) {
-        console.error("Ошибка поиска полуфабриката:", error);
+      let linkedId = isUuid(legacyId) ? legacyId : undefined;
+      if (!linkedId) {
+        const { data, error } = await supabase
+          .from("items")
+          .select("id")
+          .eq("legacy_id", legacyId)
+          .eq("kind", "semi")
+          .limit(1);
+        if (error) {
+          console.error("Ошибка поиска полуфабриката:", error);
+          return;
+        }
+        linkedId = data?.[0]?.id as string | undefined;
+      }
+      if (!linkedId) return;
+
+      const { data: specRow, error: specErr } = await supabase
+        .from("specs")
+        .select("spec_code")
+        .eq("id", specId)
+        .limit(1)
+        .maybeSingle();
+      if (specErr) {
+        console.error("Ошибка поиска спецификации:", specErr);
+        alert("Не удалось найти спецификацию, смотри консоль");
         return;
       }
-      const linkedId = data?.[0]?.id as string | undefined;
-      if (!linkedId) return;
+      const specCode = (specRow?.spec_code as string | undefined)?.trim();
+      if (!specCode) {
+        console.error("Спецификация без spec_code:", specId);
+        alert("Спецификация без кода, привязка невозможна");
+        return;
+      }
+
+      const { error: unlinkOtherCodes } = await supabase
+        .from("specs")
+        .update({
+          linked_product_id: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("linked_product_id", linkedId)
+        .neq("spec_code", specCode);
+      if (unlinkOtherCodes) {
+        console.error("Ошибка отвязки старых спецификаций:", unlinkOtherCodes);
+        alert("Не удалось отвязать старые спецификации, смотри консоль");
+        return;
+      }
+
+      const { error: unlinkOtherVersions } = await supabase
+        .from("specs")
+        .update({
+          linked_product_id: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("spec_code", specCode)
+        .neq("id", specId);
+      if (unlinkOtherVersions) {
+        console.error("Ошибка отвязки версий спецификации:", unlinkOtherVersions);
+        alert("Не удалось отвязать версии спецификации, смотри консоль");
+        return;
+      }
+
       const { error: linkErr } = await supabase
         .from("specs")
         .update({
           linked_product_id: linkedId,
           updated_at: new Date().toISOString(),
         })
-        .eq("id", specId);
+        .eq("spec_code", specCode);
       if (linkErr) {
         console.error("Ошибка привязки спецификации:", linkErr);
         alert("Не удалось привязать спецификацию, смотри консоль");
@@ -1168,13 +1218,26 @@ export default function MaterialsView() {
   const unlinkSpecFromSemi = React.useCallback(
     async (specId: string) => {
       if (!specId) return;
+      const { data: specRow, error: specErr } = await supabase
+        .from("specs")
+        .select("spec_code")
+        .eq("id", specId)
+        .limit(1)
+        .maybeSingle();
+      if (specErr) {
+        console.error("Ошибка поиска спецификации:", specErr);
+        alert("Не удалось найти спецификацию, смотри консоль");
+        return;
+      }
+      const specCode = (specRow?.spec_code as string | undefined)?.trim();
+      if (!specCode) return;
       const { error } = await supabase
         .from("specs")
         .update({
           linked_product_id: null,
           updated_at: new Date().toISOString(),
         })
-        .eq("id", specId);
+        .eq("spec_code", specCode);
       if (error) {
         console.error("Ошибка отвязки спецификации:", error);
         alert("Не удалось отвязать спецификацию, смотри консоль");

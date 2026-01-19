@@ -1379,26 +1379,59 @@ function ProductsView() {
       if (!specId) return;
       const productId = product?.id?.trim();
       if (!productId) return;
-      const { error: unlinkError } = await supabase
+      const { data: specRow, error: specErr } = await supabase
+        .from("specs")
+        .select("spec_code")
+        .eq("id", specId)
+        .limit(1)
+        .maybeSingle();
+      if (specErr) {
+        console.error("Ошибка поиска спецификации:", specErr);
+        alert("Не удалось найти спецификацию, смотри консоль");
+        return;
+      }
+      const specCode = (specRow?.spec_code as string | undefined)?.trim();
+      if (!specCode) {
+        console.error("Спецификация без spec_code:", specId);
+        alert("Спецификация без кода, привязка невозможна");
+        return;
+      }
+
+      const { error: unlinkOtherCodes } = await supabase
         .from("specs")
         .update({
           linked_product_id: null,
           updated_at: new Date().toISOString(),
         })
         .eq("linked_product_id", productId)
-        .neq("id", specId);
-      if (unlinkError) {
-        console.error("Ошибка отвязки старых спецификаций:", unlinkError);
+        .neq("spec_code", specCode);
+      if (unlinkOtherCodes) {
+        console.error("Ошибка отвязки старых спецификаций:", unlinkOtherCodes);
         alert("Не удалось отвязать старые спецификации, смотри консоль");
         return;
       }
+
+      const { error: unlinkOtherVersions } = await supabase
+        .from("specs")
+        .update({
+          linked_product_id: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("spec_code", specCode)
+        .neq("id", specId);
+      if (unlinkOtherVersions) {
+        console.error("Ошибка отвязки версий спецификации:", unlinkOtherVersions);
+        alert("Не удалось отвязать версии спецификации, смотри консоль");
+        return;
+      }
+
       const { error } = await supabase
         .from("specs")
         .update({
           linked_product_id: productId,
           updated_at: new Date().toISOString(),
         })
-        .eq("id", specId);
+        .eq("spec_code", specCode);
       if (error) {
         console.error("Ошибка привязки спецификации:", error);
         alert("Не удалось привязать спецификацию, смотри консоль");

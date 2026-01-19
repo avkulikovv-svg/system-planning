@@ -68,6 +68,60 @@ const normalizeLine = (ln: SpecLine): SpecLine => {
   const refId = ln.refId ?? ln.materialId ?? "";
   return { id: ln.id || uid(), kind, refId, qty: ln.qty || 0, uom: ln.uom || "" };
 };
+const normalizeSpecName = (name?: string | null, code?: string | null) => {
+  const trimmed = (name ?? "").trim();
+  const codeNorm = (code ?? "").trim();
+  return trimmed || codeNorm;
+};
+const normalizeSpecLinesForCompare = (lines: SpecLine[]) => {
+  const normalized = lines
+    .map(normalizeLine)
+    .filter((ln) => !!ln.refId && Number(ln.qty) !== 0)
+    .map((ln) => ({
+      kind: ln.kind ?? "mat",
+      refId: ln.refId.trim(),
+      qty: Number(ln.qty) || 0,
+      uom: (ln.uom || "").trim(),
+    }));
+  normalized.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
+    if (a.refId !== b.refId) return a.refId.localeCompare(b.refId);
+    if (a.qty !== b.qty) return a.qty - b.qty;
+    return a.uom.localeCompare(b.uom);
+  });
+  return normalized;
+};
+const isSpecUnchanged = (current: Spec, draft: Spec) => {
+  const currentCode = (current.productCode || "").trim().toLowerCase();
+  const draftCode = (draft.productCode || "").trim().toLowerCase();
+  if (currentCode !== draftCode) return false;
+
+  const currentName = normalizeSpecName(current.productName, current.productCode);
+  const draftName = normalizeSpecName(draft.productName, draft.productCode);
+  if (currentName !== draftName) return false;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const currentEff = current.effectiveFrom || today;
+  const draftEff = draft.effectiveFrom || today;
+  if (currentEff !== draftEff) return false;
+
+  const currentLines = normalizeSpecLinesForCompare(current.lines || []);
+  const draftLines = normalizeSpecLinesForCompare(draft.lines || []);
+  if (currentLines.length !== draftLines.length) return false;
+  for (let i = 0; i < currentLines.length; i += 1) {
+    const a = currentLines[i];
+    const b = draftLines[i];
+    if (
+      a.kind !== b.kind ||
+      a.refId !== b.refId ||
+      a.qty !== b.qty ||
+      a.uom !== b.uom
+    ) {
+      return false;
+    }
+  }
+  return true;
+};
 const mapRecordToSpec = (row: any): Spec => ({
   id: row.id as string,
   productId: row.linkedProductId ?? null,
@@ -292,6 +346,10 @@ export default function SpecModal({ open, onClose, spec, productRef, onSaved }: 
       }),
       updatedAt: new Date().toISOString(),
     };
+    if (spec && isSpecUnchanged(spec, clean)) {
+      onClose();
+      return;
+    }
     setSaving(true);
     try {
       const specId = await upsertSpecSupabase(clean, { materials, semis, vendors });

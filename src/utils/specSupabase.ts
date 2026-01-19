@@ -148,22 +148,7 @@ export async function upsertSpecSupabase(spec: SpecInput, ctx: SpecContext): Pro
   const specCodeRaw = spec.productCode?.trim() || spec.id || "";
   const specCode = specCodeRaw ? specCodeRaw : `SPEC-${Date.now()}`;
 
-  let linkedProductUuid: string | null = null;
-  const legacyProductId = spec.productId?.trim();
-  if (legacyProductId || spec.productCode) {
-    try {
-      linkedProductUuid = await resolveItemUuid({
-        kind: "product",
-        code: spec.productCode || specCode,
-        name: spec.productName || specCode,
-        legacyId: legacyProductId || null,
-        createIfMissing: false,
-      });
-    } catch (err) {
-      console.warn("upsertSpecSupabase: resolve product uuid failed", err);
-      linkedProductUuid = null;
-    }
-  }
+  const linkedProductUuid: string | null = null;
 
   const vendorNameById = new Map(ctx.vendors?.map((v) => [v.id, v.name]));
 
